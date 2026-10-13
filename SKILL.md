@@ -1,10 +1,95 @@
 ---
 name: workbuddy-daily-credits
-description: 自动领取 WorkBuddy 桌面客户端（Buddy加油站）的每日 100 通用积分，并做双证复核。This skill should be used when the user wants to claim WorkBuddy daily credits / 每日积分 / 签到 / Buddy加油站 / 领取积分, or set up an unattended daily claim task, or diagnose why a previous claim failed. 覆盖 Windows 桌面客户端的窗口定位、DPI 适配、账户菜单→Buddy加油站面板导航、三态判定与自愈重试。
+description: 自动领取 WorkBuddy 桌面客户端（Buddy加油站）的每日 100 通用积分，并做双证复核。This skill should be used when the user wants to install this skill and enable daily auto-claim / 安装这个 skill 并每天自动领积分 / claim WorkBuddy daily credits / 每日积分 / 签到 / Buddy加油站 / 领取积分, or set up an unattended daily claim task, or diagnose why a previous claim failed. 安装本 skill 时必须同时创建每日常规自动化任务（见第〇节）。覆盖 Windows 桌面客户端的窗口定位、DPI 适配、账户菜单→Buddy加油站面板导航、三态判定与自愈重试。
 agent_created: true
 ---
 
 # WorkBuddy 每日积分自动领取
+
+## 〇、安装后立即执行（一键落地契约）— 最高优先级
+
+> **本节优先于本文档其余所有内容。**
+> 本 skill 的「安装动作」与「开启每日自动领取」是**同一件事**，不是两步。
+> agent **不得**只把文件放进 skill 目录就收工，**也不得**反问用户「要不要创建定时任务」——直接建。
+
+### 用户侧的一句话（这就是对方的全部操作）
+
+```
+安装这个 skill：https://github.com/lxx19970628a/workbuddy-daily-credits ，并设置每天自动领积分
+```
+
+要自定义时间时：
+
+```
+安装 https://github.com/lxx19970628a/workbuddy-daily-credits ，每天早上 9:30 自动领积分
+```
+
+### agent 侧必做清单（三步，缺一不可）
+
+#### 第 1 步：安装到用户级 skill 目录
+
+```bash
+git clone https://github.com/lxx19970628a/workbuddy-daily-credits.git \
+  "$HOME/.workbuddy/skills/workbuddy-daily-credits"
+```
+
+Windows 上 `$HOME` 即 `C:\Users\<用户名>`。目录已存在时改用 `git -C <目录> pull --ff-only` 更新。
+git 不通时兜底：下载 `https://codeload.github.com/lxx19970628a/workbuddy-daily-credits/zip/refs/heads/main` 并解压到同一目录。
+
+**校验成功**（必须看到 `OK`）：
+
+```bash
+test -f "$HOME/.workbuddy/skills/workbuddy-daily-credits/SKILL.md" && echo OK
+```
+
+> ⚠️ 仓库根目录**就是** skill 本体（SKILL.md 在根）。不要再往里套一层同名目录，否则 WorkBuddy 认不出这个 skill。
+
+#### 第 2 步：创建每日常规自动化任务（默认直接建，不问）
+
+用 `automation_update`，参数（照抄，只按需改时间）：
+
+| 字段 | 值 |
+|------|-----|
+| `mode` | `create` |
+| `name` | `WorkBuddy 每日积分自动领取` |
+| `scheduleType` | `recurring` |
+| `rrule` | `FREQ=DAILY;BYHOUR=9;BYMINUTE=5` |
+| `status` | `ACTIVE` |
+| `skills` | `["workbuddy-daily-credits"]` |
+| `cwds` | skill 目录绝对路径，如 `C:\Users\<用户名>\.workbuddy\skills\workbuddy-daily-credits`（让脚本产物有固定落点） |
+| `prompt` | 见下方模板 |
+
+`prompt` 必须**自包含**（自动化运行时看不到安装时的对话）：
+
+```
+领取 WorkBuddy 今日积分，遵循 workbuddy-daily-credits skill 执行：
+1. 确认 WorkBuddy 桌面客户端进程在运行（tasklist | grep -i workbuddy）；若不在，尝试启动并最多等 10 分钟。
+2. 检查依赖：python -c "import win32gui,PIL,numpy,cv2,rapidocr_onnxruntime,pyautogui,mss"；缺哪个就 python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple <包名>，不要新建 venv。
+3. 运行 skill 目录下的 scripts/claim_gui_final.py（Windows 用户级 skill 目录 ~/.workbuddy/skills/workbuddy-daily-credits/scripts/），用 Read 读同目录 claim_run.log，不要看退出码。
+4. 运行 scripts/t2_check.py 取 T2 数值（形如 [T2] (天数, 分数)），与上次对比应为 +1 天 / +100 分。
+5. 结论只取 SUCCESS / ALREADY_DONE / FAILED 之一，并附证据（T2 数值、截图路径、走过的路径序号）。
+
+判定必须依据 skill 定义的 T1/T2 状态证据：「没找到『立即领取』」不等于「今日已领」，一律按 S3 处理并换路径重试。
+若最终 FAILED，不要放弃、不要让用户手动补领，按 skill 第六节诊断决策树排查后重试。
+```
+
+用户给了别的时间 → 把 `BYHOUR`/`BYMINUTE` 换成那个时间。
+
+**两个必须知道的约束**：
+
+1. **RRULE 用的是本地时区**，`BYHOUR=9` 就是用户本机的 9 点，**不要**手动换算成 UTC。
+2. **WorkBuddy 客户端必须处于运行状态**，任务到点才会触发；客户端关掉就不跑。
+   所以别把时间定在用户不太可能开着电脑的时段（默认 09:05 是折中值），并在回报时提醒这一点。
+
+建完后**用 `automation_update` 的 `mode:"view"` 复核一次**（确认 `rrule`、`status`、`skills` 都落对了），再回报。
+
+#### 第 3 步：一句话回报（不要长篇）
+
+> 已装好 skill，并创建了每天 09:05 的自动领取任务（可在侧边栏「自动化」里改时间或停用）。首次运行约 40 秒（含 OCR 模型下载），之后约 13 秒。注意任务只在 WorkBuddy 客户端开着时才会跑。
+
+### 唯一可以不建任务的情况
+
+用户明确说「只安装」「先别建定时任务」。此时回复里要补一句：需要时说「每天自动领积分」即可创建。
 
 ## 目的
 
@@ -260,11 +345,24 @@ python <skill目录>/scripts/t2_check.py
 
 ## 七、设置每日自动执行
 
-本 skill 只提供「领取能力」，**不自动创建定时任务**。用户要求每天自动时，引导其在 WorkBuddy 里创建一个自动化任务，指令写：
+**安装时就要建（见第〇节），不需要用户再提一次。** 本节是补充说明与手工兜底。
 
-> 领取 WorkBuddy 每日积分：运行 workbuddy-daily-credits skill 的 scripts/claim_gui_final.py，按 skill 的判定标准确认结果，输出 SUCCESS / ALREADY_DONE / FAILED 及证据。
+若用户是事后才想开自动（或安装时被跳过），或要改时间/停用：
 
-调度建议：**每天 09:05 之后**（客户端通常在整点后启动，留出启动时间），或凌晨 00:00 之后（日切后立即可领）。
+- **建/改**：用 `automation_update`，模板见第〇节第 2 步。改时间时只改 `rrule` 的 `BYHOUR`/`BYMINUTE`。
+- **停用**：把该自动化的 `status` 设为 `PAUSED`。
+- **查看**：侧边栏「自动化」里可见，也可用 `automation_update` 的 `mode:"list"`。
+
+调度时间建议：**每天 09:05 之后**（客户端通常在整点后启动，留出启动时间），或凌晨 00:00 之后（日切后立即可领）。
+
+⚠️ **两个硬约束**（都容易被忽略）：
+
+1. **RRULE 用本地时区** —— `BYHOUR=9` 就是本机 9 点，不用换算 UTC。
+2. **WorkBuddy 客户端不在运行状态就不触发。** 自动化是本地调度的，客户端退出/机器休眠都不会跑。
+   因此不要盲信「已建任务 = 会自动领」，必要时把时间调到用户大概率开着电脑的时段。
+
+自动化任务的 `prompt` 里那条「运行 skill 脚本」的指令**必须是自包含的**（写清 skill 名与脚本相对路径），
+因为自动化运行时看不到创建它的那次对话。
 
 ## 八、参考文件与运行产物
 

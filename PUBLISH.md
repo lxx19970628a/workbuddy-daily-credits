@@ -16,8 +16,7 @@
 ```
 
 > ⚠️ **本地文件夹名不必等于仓库名**。git 的仓库根由 `.git` 所在目录决定（可用
-> `git rev-parse --show-toplevel` 确认），与文件夹叫什么无关。上面这二者不同名是正常的，
-> **不要**因此去找一个叫 `workbuddy-daily-credits\` 的本地文件夹 —— 那个是仓库*内部*的 skill 子目录。
+> `git rev-parse --show-toplevel` 确认），与文件夹叫什么无关。上面这二者不同名是正常的。
 
 命令（已在 2026-10-13 执行过 `init` / `add` / `commit` / `branch -M main`，此处保留完整流程备查）：
 
@@ -34,55 +33,92 @@ git push -u origin main
 目录结构（推送后 GitHub 上看到的，注意**仓库根名 = 仓库名**，本地文件夹名不影响）：
 
 ```
-workbuddy-daily-credits/          ← GitHub 仓库根（= 本地 github-repo/ 的内容）
-├── README.md
-├── LICENSE
-├── SECURITY-AUDIT.md
+workbuddy-daily-credits/          ← GitHub 仓库根 = skill 本体（= 本地 github-repo/ 的内容）
+├── SKILL.md                      ← ★ skill 定义，必须在根
+├── references/
+│   └── troubleshooting.md
+├── scripts/
+│   ├── claim_gui_final.py
+│   └── t2_check.py
+├── README.md                     ← 仓库首页展示用
 ├── PUBLISH.md
-├── .gitignore
-└── workbuddy-daily-credits/      ← skill 本体（可被 WorkBuddy 直接安装）
-    ├── SKILL.md
-    ├── references/
-    │   └── troubleshooting.md
-    └── scripts/
-        ├── claim_gui_final.py
-        └── t2_check.py
+├── SECURITY-AUDIT.md
+└── .gitignore
 ```
 
-> ⚠️ **注意仓库嵌套**：仓库根下有一个同名子目录，这是为了兼容「把 skill 目录直接放进 `.workbuddy/skills/`」的安装方式，同时让 README 能在仓库首页展示。命名保持一致可避免用户混淆。
-> 因此本地文件夹 `github-repo/` 与它内部的 `workbuddy-daily-credits/` 是**两层不同的东西**：前者是仓库根，后者是 skill 本体。这也是最容易看错的一处。
+> ⚠️ **2026-10-13 结构调整（重要）**：原先仓库根下套了一层同名 `workbuddy-daily-credits/` 子目录放 skill，
+> 现已**把 skill 提升到根**。原因是嵌套会让 `git clone <repo> ~/.workbuddy/skills/workbuddy-daily-credits`
+> 得到 `.../workbuddy-daily-credits/workbuddy-daily-credits/SKILL.md`，WorkBuddy **认不出这是 skill**。
+> 官方技能包结构就是 `{skill-name}/SKILL.md`（见 <https://open.workbuddy.cn/docs/skill>），
+> 所以「仓库根 = skill 根」才是可被直接安装的形态。README 与 SKILL.md 同处根目录不冲突。
 
 ### 3. 打 Release（可选但推荐）
 
+在**仓库根目录**执行（在仓库的上一层，让 zip 内层带一层 `workbuddy-daily-credits/` 文件夹）：
+
 ```bash
-cd <skill 目录的父目录>
-# 生成 workbuddy-daily-credits.zip
+git archive --format=zip --prefix=workbuddy-daily-credits/ -o workbuddy-daily-credits.zip HEAD
 ```
 
-把 zip 上传到 GitHub Release，README 里给下载链接。这样用户既能 `git clone` 也能下 zip。
+也可用 GitHub 的「自动源码包」（`https://github.com/<user>/<repo>/archive/refs/heads/main.zip`），
+但它的根目录名会带 `-main` 后缀。把 zip 上传到 GitHub Release，README 里给下载链接 ——
+这样用户既能 `git clone`，也能走官方「上传技能」通道导入。
 
-## 二、让用户「打开就能装」
+## 二、让用户「一句话装好并自动跑起来」
 
-### 方式 A：对话式安装（推荐，一行话搞定）
+### 先纠正一个前提（2026-10-13 核实）
 
-用户在 WorkBuddy 里说：
+**WorkBuddy 没有「从 GitHub URL 一键安装 skill」的官方能力。** 官方只有三条路：
 
-> 帮我安装这个 skill：https://github.com/<用户名>/workbuddy-daily-credits
+| 官方路径 | 说明 |
+|---|---|
+| 技能市场 | 按名字搜索安装（需要 skill 已上架开放平台） |
+| 添加技能 → 上传技能 | 导入**本地技能包**（zip / 文件夹） |
+| 添加技能 → 查找 / 创建技能 | 向 WorkBuddy 描述需求，由它找或建 |
 
-WorkBuddy 会调用 skill 安装能力拉取并安装。装完直接说「帮我领积分」即可。
+来源：<https://www.workbuddy.cn/docs/zh/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Skills-Market>、
+<https://open.workbuddy.cn/docs/skill>（技能包结构 `{skill-name}/SKILL.md`）。
 
-### 方式 B：手动放置
+所以「一句话」不是客户端内置能力，而是**由 agent 现场执行三步**达成的。这一点必须在 README 里如实说明，
+不能让用户以为有个按钮。
 
+### 方式 A：一句话安装 + 自动建任务（主推）
+
+用户在**另一台**电脑的 WorkBuddy 里发：
+
+> 安装这个 skill：https://github.com/lxx19970628a/workbuddy-daily-credits ，并设置每天自动领积分
+
+agent 依 SKILL.md 第〇节执行：
+
+1. `git clone <repo> "$HOME/.workbuddy/skills/workbuddy-daily-credits"`
+2. 校验 `$HOME/.workbuddy/skills/workbuddy-daily-credits/SKILL.md` 存在
+3. 用 `automation_update` 建每日任务（`FREQ=DAILY;BYHOUR=9;BYMINUTE=5`，`skills:["workbuddy-daily-credits"]`）
+4. 一句话回报创建结果
+
+**关键设计：把「安装」和「开启每日自动」写成同一件事。** SKILL.md 第〇节明确
+「不得只装文件就收工，也不得反问用户要不要建定时任务」——否则用户就要说两句，
+达不到「一句话」的要求。
+
+> 时间可自定义：`…每天早上 9:30 自动领积分` → agent 改 `BYHOUR`/`BYMINUTE`。
+
+### 方式 B：手动 clone
+
+```bash
+git clone https://github.com/lxx19970628a/workbuddy-daily-credits.git \
+  "$HOME/.workbuddy/skills/workbuddy-daily-credits"
 ```
-1. 下载/克隆仓库
-2. 把 workbuddy-daily-credits/ 文件夹复制到：
-   Windows:  C:\Users\<用户名>\.workbuddy\skills\
-3. 重启 WorkBuddy（或新开一个会话）
+
+重启 WorkBuddy 后说一句「每天自动领积分」，skill 会补建任务。
+
+### 方式 C：zip 导入（官方通道，最稳）
+
+```bash
+# 在仓库根目录的上一层执行，产物 zip 内层须有含 SKILL.md 的文件夹
+git archive --format=zip --prefix=workbuddy-daily-credits/ -o workbuddy-daily-credits.zip HEAD
 ```
 
-### 方式 C：zip 安装
-
-把 Release 里的 `workbuddy-daily-credits.zip` 交给 WorkBuddy，说「安装这个 skill」。
+把 zip 交给 WorkBuddy，走「技能 → 添加技能 → 上传技能」导入。
+注意 `git archive` 打出的包**不含 `.git`**，适合上传开放平台；若走 `git clone` 安装则保留 `.git` 便于 `git pull` 更新。
 
 ## 三、「每个人都能成功」的真实边界
 
@@ -167,6 +203,9 @@ README 已如实告知这些边界，避免过度承诺。
 
 - [x] SKILL.md 含 `name` / `description` / `agent_created: true`
 - [x] `description` 覆盖中英文触发词（中文用户与英文用户都能触发）
+- [x] **SKILL.md 位于仓库根目录**（否则 clone 到 `.workbuddy/skills/` 后 WorkBuddy 识别不出）
+- [x] **SKILL.md 第〇节写明「安装 = 安装 + 建每日任务」**，且禁止反问用户是否创建
+- [x] 第〇节的 `automation_update` 参数表可直接照抄（含 rrule / skills / 自包含 prompt 模板）
 - [x] 脚本自包含，无路径硬编码，无外部资产依赖
 - [x] 在「无模板、无历史文件」的干净目录实测通过
 - [x] v7.6 面板区限定路径实测通过（`面板区域 (1909,927,2842,1321)` → `T2: 13天/1300分`）
@@ -175,9 +214,12 @@ README 已如实告知这些边界，避免过度承诺。
 - [x] 分发 zip 不含 `__pycache__` / 运行时产物（只含 SKILL.md + references + 2 个脚本）
 - [x] 安全审计通过（P2，无 P0/P1 实质风险）
 - [x] README 含安装、使用、限制、排查入口
+- [x] README 开头有「30 秒上手」的一句话安装块
+- [x] README / PUBLISH 如实说明「官方无 URL 一键安装通道」，不制造错误预期
 - [x] LICENSE（MIT）
 - [x] .gitignore 排除运行时产物
 - [x] 三处被推翻的旧结论已在 SKILL.md / troubleshooting.md / README 中更正
+- [ ] **在一台干净机器上真机验证「一句话安装 → 自动化任务已创建 → 次日自动跑通」**（尚未做）
 
 ## 五、后续维护建议
 
@@ -187,3 +229,5 @@ README 已如实告知这些边界，避免过度承诺。
 4. **做推断前先复位 UI 状态**。本项目历史上多次误诊都源于在脏帧上推断 —— 这是最高优先级的纪律。
 5. 若要支持 macOS，新建分支重写 `print_window` / `find_window` / `activate` 三个函数，判定逻辑（`judge` / 三态）可原样复用。
 6. **改锚点后记得删 `claim_fastpath.json`**。固化坐标基于旧锚点推算，锚点一变缓存即失效（脚本会自愈回退，但删掉更干脆）。
+7. **不要往仓库根再套一层 skill 子目录**。第〇节的 clone 目标路径依赖「仓库根 = skill 根」这个前提；
+   一旦嵌套，用户的 `git clone <repo> ~/.workbuddy/skills/<name>` 就会装出一个识别不了的目录。
