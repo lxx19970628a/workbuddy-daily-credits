@@ -38,6 +38,9 @@ test -f "$HOME/.workbuddy/skills/workbuddy-daily-credits/SKILL.md" && echo OK
 （默认 `FREQ=DAILY;BYHOUR=9;BYMINUTE=5`，`skills: ["workbuddy-daily-credits"]`，prompt 模板在第〇节里）——
 **不要再问用户「要不要建定时任务」**，直接建。用户给了别的时间就用那个时间。
 
+> 💡 **刚装好的 skill 往往要新开一个会话才会被「激活」**，所以**别等 skill 被识别** ——
+> 直接用 Read 读磁盘上的 `SKILL.md` 并照做，本次会话就能把自动化任务建完。
+
 **4. 一句话回报**：装好了 + 任务已建（默认每天 09:05）+ 去哪改时间/停用。
 
 > ⚠️ 本仓库**根目录就是 skill 本体**（`SKILL.md` 在根），不要再往里套一层同名目录，

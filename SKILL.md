@@ -43,6 +43,9 @@ test -f "$HOME/.workbuddy/skills/workbuddy-daily-credits/SKILL.md" && echo OK
 ```
 
 > ⚠️ 仓库根目录**就是** skill 本体（SKILL.md 在根）。不要再往里套一层同名目录，否则 WorkBuddy 认不出这个 skill。
+>
+> 💡 **刚装好的 skill 通常要新开一个会话才会被「激活」，不要等它生效** ——
+> 直接用 Read 读刚 clone 下来的 `SKILL.md` 并照本节执行，本次会话就能把任务建完。
 
 #### 第 2 步：创建每日常规自动化任务（默认直接建，不问）
 
