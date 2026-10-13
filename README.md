@@ -148,6 +148,10 @@ UI 状态复位 + 还原最小化窗口 + 渲染层存活探针（检测"陈旧�
 
 ## 安装（一句话，装完就是「已开启自动领取」）
 
+**最新版本：v7.8.0** ·
+下载 zip：[`workbuddy-daily-credits.zip`](https://github.com/lxx19970628a/workbuddy-daily-credits/releases/latest/download/workbuddy-daily-credits.zip) ·
+[全部 Release](https://github.com/lxx19970628a/workbuddy-daily-credits/releases)
+
 在**另一台**电脑的 WorkBuddy 里，把下面这句原样发给它：
 
 > **安装这个 skill：https://github.com/lxx19970628a/workbuddy-daily-credits ，并设置每天自动领积分**
@@ -186,6 +190,16 @@ git clone https://github.com/lxx19970628a/workbuddy-daily-credits.git \
 - **当前项目共享**：`<项目目录>/.workbuddy/skills/`
 
 放好后重启 WorkBuddy（或新开会话），再说一句「每天自动领积分」，skill 会补建定时任务。
+
+### 方式三：下载 zip 走官方「上传技能」通道（不依赖命令执行权限）
+
+如果目标机器上 agent 没有命令执行权限，或者你更想走官方路径：
+
+1. 下载 [`workbuddy-daily-credits.zip`](https://github.com/lxx19970628a/workbuddy-daily-credits/releases/latest/download/workbuddy-daily-credits.zip)
+2. WorkBuddy → 侧边栏「专家·技能·连接器」→ 技能 → 右上角「添加技能」→ **上传技能** → 选这个 zip
+3. 导入后系统自动完成配置；再说一句「每天自动领积分」补建定时任务
+
+zip 内部结构是 `workbuddy-daily-credits/SKILL.md` + `references/` + `scripts/`，符合官方技能包结构。
 
 ## 使用
 

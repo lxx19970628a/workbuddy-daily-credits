@@ -52,16 +52,38 @@ workbuddy-daily-credits/          ← GitHub 仓库根 = skill 本体（= 本地
 > 官方技能包结构就是 `{skill-name}/SKILL.md`（见 <https://open.workbuddy.cn/docs/skill>），
 > 所以「仓库根 = skill 根」才是可被直接安装的形态。README 与 SKILL.md 同处根目录不冲突。
 
-### 3. 打 Release（可选但推荐）
+### 3. 打 Release（**已做：v7.8.0**）
 
-在**仓库根目录**执行（在仓库的上一层，让 zip 内层带一层 `workbuddy-daily-credits/` 文件夹）：
+**版本号约定**：`SKILL.md` frontmatter 里的 `version` 就是版本源头（当前 `7.8.0`）。
+改动判定逻辑 / 锚点常量 → 升 minor；只改文档 → 升 patch；目录结构破坏性变更 → 升 major。
+
+在**仓库根目录**执行，让 zip 内层带一层 `workbuddy-daily-credits/` 文件夹（符合官方技能包结构）：
 
 ```bash
 git archive --format=zip --prefix=workbuddy-daily-credits/ -o workbuddy-daily-credits.zip HEAD
 ```
 
-也可用 GitHub 的「自动源码包」（`https://github.com/<user>/<repo>/archive/refs/heads/main.zip`），
-但它的根目录名会带 `-main` 后缀。把 zip 上传到 GitHub Release，README 里给下载链接 ——
+> ⚠️ 不要用 GitHub 的「自动源码包」（`archive/refs/heads/main.zip`）——它的根目录名会带 `-main` 后缀，
+> 导入时技能名会变成 `workbuddy-daily-credits-main`。
+
+**上传到 Release**（用 API 直接传附件，避免手工拖拽）：
+
+```bash
+# 1) 建 tag + release
+curl -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" \
+  https://api.github.com/repos/lxx19970628a/workbuddy-daily-credits/releases \
+  -d '{"tag_name":"v7.8.0","name":"v7.8.0","body":"<release notes>","draft":false,"prerelease":false}'
+
+# 2) 传附件（注意 Content-Type: application/zip）
+curl -X POST -H "Authorization: Bearer $GH_TOKEN" \
+  -H "Content-Type: application/zip" \
+  --data-binary @workbuddy-daily-credits.zip \
+  "https://api.github.com/repos/lxx19970628a/workbuddy-daily-credits/releases/<release_id>/assets?name=workbuddy-daily-credits.zip"
+```
+
+> ⚠️ curl 访问 GitHub 必须加 `--noproxy '*'`（本机 `~/.gitconfig` 里的 `127.0.0.1:7897` 代理已失效）。
+> 传完用 `releases/latest/download/workbuddy-daily-credits.zip` 这个**稳定链接**写进 README，不要写带 tag 的链接。
+
 这样用户既能 `git clone`，也能走官方「上传技能」通道导入。
 
 ## 二、让用户「一句话装好并自动跑起来」
@@ -201,11 +223,13 @@ README 已如实告知这些边界，避免过度承诺。
 
 ## 四、建议的发布检查清单
 
-- [x] SKILL.md 含 `name` / `description` / `agent_created: true`
+- [x] SKILL.md 含 `name` / `version` / `description` / `agent_created: true`
 - [x] `description` 覆盖中英文触发词（中文用户与英文用户都能触发）
 - [x] **SKILL.md 位于仓库根目录**（否则 clone 到 `.workbuddy/skills/` 后 WorkBuddy 识别不出）
 - [x] **SKILL.md 第〇节写明「安装 = 安装 + 建每日任务」**，且禁止反问用户是否创建
-- [x] 第〇节的 `automation_update` 参数表可直接照抄（含 rrule / skills / 自包含 prompt 模板）
+- [x] 第〇节的 `automation_update` 参数表可直接照抄（含 rrule / skills / cwds / 自包含 prompt 模板）
+- [x] Release 已发布并附 `workbuddy-daily-credits.zip`（内层含 `workbuddy-daily-credits/`，符合官方技能包结构）
+- [x] README 里用 `releases/latest/download/...` 稳定链接，不用带 tag 的链接
 - [x] 脚本自包含，无路径硬编码，无外部资产依赖
 - [x] 在「无模板、无历史文件」的干净目录实测通过
 - [x] v7.6 面板区限定路径实测通过（`面板区域 (1909,927,2842,1321)` → `T2: 13天/1300分`）

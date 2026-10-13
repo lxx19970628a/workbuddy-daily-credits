@@ -1,5 +1,6 @@
 ---
 name: workbuddy-daily-credits
+version: 7.8.0
 description: 自动领取 WorkBuddy 桌面客户端（Buddy加油站）的每日 100 通用积分，并做双证复核。This skill should be used when the user wants to install this skill and enable daily auto-claim / 安装这个 skill 并每天自动领积分 / claim WorkBuddy daily credits / 每日积分 / 签到 / Buddy加油站 / 领取积分, or set up an unattended daily claim task, or diagnose why a previous claim failed. 安装本 skill 时必须同时创建每日常规自动化任务（见第〇节）。覆盖 Windows 桌面客户端的窗口定位、DPI 适配、账户菜单→Buddy加油站面板导航、三态判定与自愈重试。
 agent_created: true
 ---
