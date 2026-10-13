@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 运行时产物（固定同名覆盖，不应入库）
+claim_pre.png
+claim_result.png
+claim_diag.png
+claim_run.log
+t2_run.log
+evidence_*.png
+# 快路径缓存：每台机器的实测坐标，因人因机而异，绝不能入库
+claim_fastpath.json
+claim_fastpath.json.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 打包产物
+dist/
+*.zip
