@@ -8,25 +8,37 @@
 
 ### 2. 推送本目录
 
-本目录（`github-repo/`）已是可直接推送的仓库根：
+**目标文件夹（仓库根）就是本文件所在目录**：
+
+```
+<本地路径>  C:\Users\sean\WorkBuddy\skills\github-repo\
+<仓库名>    workbuddy-daily-credits
+```
+
+> ⚠️ **本地文件夹名不必等于仓库名**。git 的仓库根由 `.git` 所在目录决定（可用
+> `git rev-parse --show-toplevel` 确认），与文件夹叫什么无关。上面这二者不同名是正常的，
+> **不要**因此去找一个叫 `workbuddy-daily-credits\` 的本地文件夹 —— 那个是仓库*内部*的 skill 子目录。
+
+命令（已在 2026-10-13 执行过 `init` / `add` / `commit` / `branch -M main`，此处保留完整流程备查）：
 
 ```bash
-cd <本目录路径>
-git init
+cd "C:\Users\sean\WorkBuddy\skills\github-repo"   # ← 就是本文件所在目录
+git init                                          # 已执行
 git add .
-git commit -m "feat: WorkBuddy 每日积分自动领取 skill（v7.7 泛化 + 快路径版）"
-git branch -M main
+git commit -m "feat: WorkBuddy 每日积分自动领取 skill（v7.7 泛化 + 快路径版）"   # 已执行 → 42a0103
+git branch -M main                                # 已执行
 git remote add origin https://github.com/<你的用户名>/workbuddy-daily-credits.git
 git push -u origin main
 ```
 
-目录结构（推送后 GitHub 上应看到）：
+目录结构（推送后 GitHub 上看到的，注意**仓库根名 = 仓库名**，本地文件夹名不影响）：
 
 ```
-workbuddy-daily-credits/          ← 仓库根
+workbuddy-daily-credits/          ← GitHub 仓库根（= 本地 github-repo/ 的内容）
 ├── README.md
 ├── LICENSE
 ├── SECURITY-AUDIT.md
+├── PUBLISH.md
 ├── .gitignore
 └── workbuddy-daily-credits/      ← skill 本体（可被 WorkBuddy 直接安装）
     ├── SKILL.md
@@ -38,6 +50,7 @@ workbuddy-daily-credits/          ← 仓库根
 ```
 
 > ⚠️ **注意仓库嵌套**：仓库根下有一个同名子目录，这是为了兼容「把 skill 目录直接放进 `.workbuddy/skills/`」的安装方式，同时让 README 能在仓库首页展示。命名保持一致可避免用户混淆。
+> 因此本地文件夹 `github-repo/` 与它内部的 `workbuddy-daily-credits/` 是**两层不同的东西**：前者是仓库根，后者是 skill 本体。这也是最容易看错的一处。
 
 ### 3. 打 Release（可选但推荐）
 
