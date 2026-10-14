@@ -84,12 +84,10 @@ WorkBuddy 的每日积分只能在**桌面客户端**领，网页端没有入口
     ↓ 无缓存 / 缓存失效
 UI 状态复位 + 还原最小化窗口 + 渲染层存活探针（检测"陈旧帧"）
     ↓
-五条路径逐级降级，命中即返回：
+三条路径依次尝试，命中即返回（v8.0 已删除全部无效兜底与降级分支）：
     路径 1    账户菜单 → Buddy加油站完整面板   ← 主路径（唯一可靠入口）
     路径 2    直读侧栏底部区域（少数版本有常驻卡片）
-    路径 3    滚侧栏到底再读
-    路径 4    整屏 OCR 搜「立即领取」
-    路径 5    黑色按钮模板匹配（兜底）
+    路径 3    整屏 OCR 搜「立即领取」
     ↓
 点击 → 回读强校验 → 输出 T1/T2 证据 → 成功后固化坐标供下次走快路径
 ```
@@ -148,7 +146,7 @@ UI 状态复位 + 还原最小化窗口 + 渲染层存活探针（检测"陈旧�
 
 ## 安装（一句话，装完就是「已开启自动领取」）
 
-**最新版本：v7.9.0** ·
+**最新版本：v8.0.0** ·
 下载 zip：[`workbuddy-daily-credits.zip`](https://github.com/lxx19970628a/workbuddy-daily-credits/releases/latest/download/workbuddy-daily-credits.zip) ·
 [全部 Release](https://github.com/lxx19970628a/workbuddy-daily-credits/releases)
 
@@ -227,26 +225,20 @@ Skill 会自动：确认客户端在运行 → 检查/安装依赖 → 执行领
 - **WorkBuddy 桌面客户端已安装并登录**
 - **Python 3.10+**（依赖由 skill 引导自动安装，无需手动准备）
 
-### 依赖（新机器只需 1 条命令，3 个小包约 20MB，秒级装完）
+### 依赖（新机器只需 1 条命令，2 个包约 15MB，秒级装完）
 
 ```bash
-python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pywin32 Pillow numpy
+python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pywin32 Pillow
 ```
 
 **OCR 直接用 Windows 系统自带引擎**（Windows.Media.Ocr，Win10/11 内置中文支持，
 经 `scripts/ocr_winrt.ps1` 调用，零 pip 依赖，实测 ~1.4s/次）——
 **不需要装 rapidocr / onnxruntime / opencv 那一整套约 250MB 的依赖。**
 
-以下均为**可选**（缺失自动降级，无需安装）：
+鼠标/键盘/滚轮走纯 ctypes（`SendInput`），抓屏走 GDI BitBlt / PrintWindow —— **零额外依赖**。
 
-| 包 | 作用 | 缺失时的降级 |
-|---|---|---|
-| `rapidocr-onnxruntime` | OCR 兜底后端 | 仅当 Windows 系统 OCR 不可用（如缺中文语言包）才需要；装它可运行 `python -m pip install rapidocr-onnxruntime` |
-| `pyautogui` | 鼠标 / 键盘事件 | 降级为纯 ctypes 的 `SendInput` / `SetCursorPos` |
-| `mss` | 屏幕抓取兜底 | 降级为纯 ctypes 的 GDI `BitBlt` |
-
-> 实测（2026-10-14）：仅装 3 个核心包，Windows OCR 后端即可完整跑通真实领取流程。
-> 若某台机器报「Windows 系统 OCR 不可用」：补装中文语言包（含 OCR），或装 rapidocr 兜底。
+> v8.0 起已删除全部可选降级分支（pyautogui / mss / rapidocr 等），仅保留唯一路径。
+> 若某台机器报「Windows 系统 OCR 不可用」：补装中文语言包（含 OCR）。
 
 ## 已知限制
 

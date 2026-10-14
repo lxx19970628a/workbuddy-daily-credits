@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WorkBuddy 每日积分 - GUI 自动化脚本 v7.7（2026-10-13）
+WorkBuddy 每日积分 - GUI 自动化脚本 v8.0（2026-10-14）
 
 v7.7 = **快路径版**：本机首次跑通后固化成功坐标，之后直接复用 → 一轮 39s → ~13s。
 
@@ -149,24 +149,17 @@ D) **窗口还原修正**：最小化窗口的 `GetWindowRect` 返回 **-32000 �
 4) 不无条件 SW_MAXIMIZE；仅在最小化/未最大化时才恢复。
 5) 侧栏可能折叠 ⇒ OCR 找不到入口时滚动侧栏到底部再判。
 
-依赖（核心，必装，共 3 个，约 20MB，秒级安装）：
-  v7.9（2026-10-14）：OCR 默认改走 **Windows 系统自带 OCR**（Windows.Media.Ocr，
-  Win10/11 内置中文支持，经 scripts/ocr_winrt.ps1 子进程调用，零 pip 依赖，
-  实测 ~1.4s/次，与 rapidocr 相当甚至更快）。rapidocr 全家桶（onnxruntime/
-  opencv/shapely/pyclipper…约 250MB）从必装降为**可选兜底**。
+依赖（核心，必装，共 2 个）：
+  v8.0（2026-10-14）：**去掉全部兜底分支**，只保留实测跑通的唯一路径。
+
+  OCR：Windows 系统自带引擎（Windows.Media.Ocr / Win10·11 内置中文），
+       经 scripts/ocr_winrt.ps1 调用 —— **零 pip 依赖**，实测 ~1.4s/次。
+       调用固定走 Windows PowerShell 5.1（System32 下的 powershell.exe）：
+       PowerShell 7 **不支持 WinRT 类型投影**，无法调用。
+       不探测、不降级 —— 5.1 是 Win10/11 出厂自带，无需用户安装任何东西。
 
   pywin32   窗口定位 / PrintWindow 抓帧 / ShowWindowAsync 还原
-  Pillow    图像容器与裁剪、放大
-  numpy     像素差探针（陈帧检测）
-
-依赖（可选，缺失自动降级，**不影响领取**）：
-  rapidocr-onnxruntime  OCR 兜底后端（仅当 Windows 系统 OCR 不可用 / 缺中文
-                        语言包时需要；正常 Windows 中文系统无需安装）
-  pyautogui             鼠标键盘事件（缺失时降级为 SendInput/SetCursorPos ctypes 实现）
-  mss                   屏幕抓取兜底（仅 PrintWindow 失败时用；缺失时降级为 GDI BitBlt）
-  opencv-python         模板匹配兜底（通常由 rapidocr 带入；缺失只影响模板路径）
-
-  → 实测：仅装 3 个核心包，Windows OCR 后端即可完整运行。
+  Pillow    图像容器与裁剪、放大、像素差探针
 
 运行：python claim_gui_final.py
 退出码：0 = SUCCESS / ALREADY_DONE；1 = UNKNOWN（= agent 没搞定，必须重试）
@@ -174,7 +167,7 @@ D) **窗口还原修正**：最小化窗口的 `GetWindowRect` 返回 **-32000 �
 import ctypes
 
 def _set_dpi_aware():
-    """必须在导入 pyautogui / 使用任何 GDI 坐标之前调用。"""
+    """必须在调用任何 GDI 坐标相关 API 之前执行（窗口截图 / 点击 / OCR 全依赖）。"""
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)   # per-monitor v2
         return "per-monitor-v2"
@@ -199,56 +192,24 @@ import os
 import re
 import sys
 import time
-import numpy as np
 
-# ── 核心依赖（缺失即无法工作，直接报错退出）──────────────────────────
-# 2026-10-14：OCR 默认改走 **Windows 系统自带 OCR**（Windows.Media.Ocr，经
-#   scripts/ocr_winrt.ps1 调用，零 pip 依赖）。rapidocr 全家桶（onnxruntime /
-#   opencv / shapely / pyclipper …约 250MB）降级为**可选兜底**。
+# ── 核心依赖（仅 2 个；缺失即无法工作）────────────────────────────────
+# v8.0：删除全部第三方可选依赖与兜底分支。鼠标/按键/滚轮走 SendInput(ctypes)，
+#       抓屏走 GDI BitBlt(ctypes)，OCR 走 Windows 自带引擎，像素对比走 Pillow。
 try:
-    from PIL import Image
+    from PIL import Image, ImageChops
     import win32gui
     import win32con
     import win32api
     import win32process
 except ImportError as e:
     print(f"[FATAL] 缺少核心依赖: {e}")
-    print("        请执行： python -m pip install pywin32 Pillow numpy")
+    print("        请执行： python -m pip install pywin32 Pillow")
     sys.exit(2)
-
-# ── 可选依赖（缺失自动降级，不阻塞）─────────────────────────────────
-# 2026-10-14：rapidocr-onnxruntime 降级为可选 —— 仅当 Windows 系统 OCR 不可用时兜底。
-# pyautogui / mss 亦为可选（ctypes/GDI 已内置降级实现）。
-_OPT_MISSING = []
-
-try:
-    from rapidocr_onnxruntime import RapidOCR
-except ImportError:
-    RapidOCR = None
-    _OPT_MISSING.append("rapidocr-onnxruntime(可选,仅WindowsOCR不可用时需要)")
-
-try:
-    import pyautogui
-    pyautogui.FAILSAFE = False
-except ImportError:
-    pyautogui = None
-    _OPT_MISSING.append("pyautogui")
-
-try:
-    import mss
-except ImportError:
-    mss = None
-    _OPT_MISSING.append("mss")
-
-try:
-    import cv2          # 通常由 rapidocr 带入；此处仍做容错，缺失只影响模板兜底
-except ImportError:
-    cv2 = None
-    _OPT_MISSING.append("opencv-python")
 
 
 def _mouse_event_input(flags, dx=0, dy=0, data=0):
-    """ctypes 版鼠标事件（SendInput），pyautogui 缺失时的降级实现。"""
+    """鼠标事件（SendInput）。"""
 
     class MOUSEINPUT(ctypes.Structure):
         _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
@@ -268,7 +229,7 @@ def _mouse_event_input(flags, dx=0, dy=0, data=0):
 
 
 def _key_event_input(vk, up=False):
-    """ctypes 版按键事件（SendInput），pyautogui 缺失时的降级实现。"""
+    """按键事件（SendInput）。"""
 
     class KEYBDINPUT(ctypes.Structure):
         _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
@@ -296,31 +257,13 @@ VK_ESCAPE = 0x1B
 
 
 def move_to(x, y, duration=None):
-    """移动鼠标到绝对坐标。优先 pyautogui，缺失时降级 SendInput。"""
-    x, y = int(x), int(y)
-    if pyautogui is not None:
-        try:
-            if duration:
-                pyautogui.moveTo(x, y, duration=duration)
-            else:
-                pyautogui.moveTo(x, y)
-            return
-        except Exception:
-            pass
-    # 降级：SetCursorPos 足够（不需要平滑动画）
-    ctypes.windll.user32.SetCursorPos(x, y)
+    """移动鼠标到绝对坐标。"""
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
 
 
 def click_at(x, y):
-    """在绝对坐标点击一次。优先 pyautogui，缺失时降级 SendInput。"""
-    x, y = int(x), int(y)
-    if pyautogui is not None:
-        try:
-            pyautogui.click(x, y)
-            return
-        except Exception:
-            pass
-    ctypes.windll.user32.SetCursorPos(x, y)
+    """在绝对坐标点击一次（SendInput）。"""
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
     time.sleep(0.05)
     _mouse_event_input(MOUSEEVENTF_LEFTDOWN)
     time.sleep(0.03)
@@ -328,13 +271,7 @@ def click_at(x, y):
 
 
 def press_esc():
-    """按一次 Esc。优先 pyautogui，缺失时降级 SendInput。"""
-    if pyautogui is not None:
-        try:
-            press_esc()
-            return
-        except Exception:
-            pass
+    """按一次 Esc。"""
     _key_event_input(VK_ESCAPE)
     time.sleep(0.02)
     _key_event_input(VK_ESCAPE, up=True)
@@ -342,12 +279,6 @@ def press_esc():
 
 def scroll(direction):
     """滚轮滚动。direction > 0 向上，< 0 向下。"""
-    if pyautogui is not None:
-        try:
-            scroll(direction)
-            return
-        except Exception:
-            pass
     _mouse_event_input(MOUSEEVENTF_WHEEL, data=(120 if direction > 0 else -120))
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -357,7 +288,6 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_RESULT = os.path.join(BASE, "claim_result.png")   # 点击后 / 终态（覆盖）
 PRE_RESULT = os.path.join(BASE, "claim_pre.png")         # 点击前 S1（覆盖）
 GROWTH_SHOT = os.path.join(BASE, "claim_diag.png")       # 路径 3 整屏诊断图（覆盖）
-BLACK_BTN_TPL = os.path.join(BASE, "claim_btn_black.png")
 RUN_LOG = os.path.join(BASE, "claim_run.log")            # 运行日志（覆盖，非追加）
 
 # ═══════════ v7.7 快路径缓存（2026-10-13）═══════════
@@ -382,51 +312,68 @@ FASTPATH_SCHEMA = 1
 # 用模块级变量是为了不改动现有函数签名（改动面最小）。
 _LAST_NAV = {}
 
-# ── OCR 后端（2026-10-14 双后端架构）─────────────────────────────────
-# 首选：Windows 系统自带 OCR（Windows.Media.Ocr，Win10/11 内置，中文开箱即用，
-#       经 scripts/ocr_winrt.ps1 子进程调用，零 pip 依赖，实测 ~1.4s/次）。
-# 兜底：rapidocr-onnxruntime（pip 装，仅当系统 OCR 不可用 / 中文语言包缺失时）。
-# 两者输出统一为 [(cx, cy, score, text)]，下游 judge()/parse_t2() 等零改动。
+# ── OCR：Windows 系统自带引擎（唯一后端，无兜底）──────────────────────
+# Windows.Media.Ocr（Win10/11 内置，中文开箱即用），经 scripts/ocr_winrt.ps1 调用。
+# 零 pip 依赖，实测 ~1.4s/次。
+#
+# 固定走 Windows PowerShell 5.1：PowerShell 7 **不支持 WinRT 类型投影**，
+# `[Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]`
+# 会报 `Unable to find type`。5.1 是 Win10/11 出厂自带的，无需用户安装任何东西。
 _PS5_EXE = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
                         r"System32\WindowsPowerShell\v1.0\powershell.exe")
 _PS1_OCR = os.path.join(BASE, "ocr_winrt.ps1")
 _CREATE_NO_WINDOW = 0x08000000
-OCR_BACKEND = None          # 'winrt' | 'rapidocr' | None(未探测)
-_RAPID_ENGINE = None
-_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef0-9A-Za-z]")
+_OCR_READY = False
 
 
 def _norm_ocr_text(s):
-    """去掉 Windows OCR 在 CJK/数字字符间插入的空格（「立 即 领 取」→「立即领取」）。"""
+    """去掉系统 OCR 在 CJK/数字字符间插入的空格（「立 即 领 取」→「立即领取」）。"""
     return re.sub(r"(?<=[\u4e00-\u9fff0-9A-Za-z])\s+(?=[\u4e00-\u9fff0-9A-Za-z])", "", s or "").strip()
 
 
+def _ocr_check_env():
+    """启动时一次性校验 OCR 运行环境（PowerShell 5.1 + ocr_winrt.ps1 + 中文引擎）。"""
+    global _OCR_READY
+    if not os.path.isfile(_PS5_EXE):
+        print(f"[FATAL] 找不到 Windows PowerShell 5.1：{_PS5_EXE}")
+        print("        本脚本依赖系统自带 OCR，必须是 Win10/11 默认环境。")
+        sys.exit(2)
+    if not os.path.isfile(_PS1_OCR):
+        print(f"[FATAL] 缺少 OCR 调用器：{_PS1_OCR}")
+        print("        请确认 skill 完整安装（scripts/ocr_winrt.ps1 必须存在）。")
+        sys.exit(2)
+    data = _ocr_winrt_raw(Image.new("RGB", (8, 8), "white"))
+    if str(data.get("lang", "")).startswith("zh"):
+        _OCR_READY = True
+        log(f"[ocr] Windows 系统 OCR 就绪（{data['lang']}）")
+        return
+    print("[FATAL] Windows 系统 OCR 不可用（未识别到中文引擎）。")
+    print(f"        错误：{data.get('err') or '未知'}")
+    print("        请到「设置 → 时间和语言 → 语言」添加「中文(简体)」语言包（含 OCR 功能）。")
+    print("        Win10/11 中文系统默认自带，通常无需操作。")
+    sys.exit(2)
+
+
 def _ocr_winrt_raw(pil):
-    """调 ocr_winrt.ps1 识别一张 PIL 图，返回 {'lang':str,'lines':[...]}。
-    lang 为空或抛异常均视为后端不可用（由调用方降级）。"""
+    """调 ocr_winrt.ps1 识别一张 PIL 图，返回 {'lang':str,'lines':[...]}。"""
     import subprocess
     import tempfile
-    if not (os.path.isfile(_PS5_EXE) and os.path.isfile(_PS1_OCR)):
-        return {"lang": "", "lines": []}
     tmpdir = tempfile.gettempdir()
     img_path = os.path.join(tmpdir, "wb_ocr_in.png")
     out_path = os.path.join(tmpdir, "wb_ocr_out.json")
     pil.save(img_path, "PNG")
-    try:
-        subprocess.run(
-            [_PS5_EXE, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", _PS1_OCR,
-             "-ImgPath", img_path, "-OutPath", out_path],
-            timeout=120, creationflags=_CREATE_NO_WINDOW,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        with open(out_path, "r", encoding="utf-8-sig") as f:
-            return json.load(f)
-    except Exception:
-        return {"lang": "", "lines": []}
+    subprocess.run(
+        [_PS5_EXE, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", _PS1_OCR,
+         "-ImgPath", img_path, "-OutPath", out_path],
+        timeout=120, creationflags=_CREATE_NO_WINDOW,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with open(out_path, "r", encoding="utf-8-sig") as f:
+        return json.load(f)
 
 
-def _winrt_hits(data, ox=0, oy=0):
-    """把 winrt JSON 转成 [(cx,cy,score,text)]。按相邻词间距合并词组：
-    「立/即/领/取」→ 一个命中（贴近 rapidocr 的文本框粒度，点击坐标更准）。"""
+def _ocr_hits(data, ox=0, oy=0):
+    """把 OCR JSON 转成 [(cx,cy,score,text)]。按相邻词间距合并词组：
+    「立/即/领/取」→ 一个命中（还原成整词，点击坐标落在词组中心）。"""
     hits = []
     for line in data.get("lines", []):
         words = line.get("words") or []
@@ -457,31 +404,6 @@ def _winrt_hits(data, ox=0, oy=0):
             if t:
                 hits.append((int((gx0 + gx1) / 2) + ox, int((gy0 + gy1) / 2) + oy, 0.90, t))
     return hits
-
-
-def _ensure_backend():
-    """首次 OCR 调用时探测后端：优先 winrt（需识别出 zh 语言），否则 rapidocr。"""
-    global OCR_BACKEND, _RAPID_ENGINE
-    if OCR_BACKEND is not None:
-        return OCR_BACKEND
-    probe = Image.new("RGB", (8, 8), "white")
-    try:
-        data = _ocr_winrt_raw(probe)
-        if str(data.get("lang", "")).startswith("zh"):
-            OCR_BACKEND = "winrt"
-            log("[ocr] 后端 = Windows 系统 OCR（zh，零依赖）")
-            return OCR_BACKEND
-    except Exception:
-        pass
-    if RapidOCR is not None:
-        _RAPID_ENGINE = RapidOCR()
-        OCR_BACKEND = "rapidocr"
-        log("[ocr] 后端 = rapidocr（Windows 系统 OCR 不可用，已自动降级）")
-        return OCR_BACKEND
-    print("[FATAL] 无可用 OCR 后端：Windows 系统 OCR 不可用，且未安装 rapidocr。")
-    print("        方案一：系统设置→时间和语言→语言→添加中文(简体)语言包(含OCR)；")
-    print("        方案二：python -m pip install rapidocr-onnxruntime")
-    sys.exit(2)
 
 KEY_CLAIM = "立即领取"
 KEY_DONES = ("今日已领", "今日已领取", "今日已签到", "已签到", "已领取")
@@ -686,14 +608,25 @@ _RENDERER_WAIT = 30           # 等待新 renderer + 新窗口出现的秒数
 
 
 def _img_diff(a, b):
+    """两图「有变化的像素数」。纯 Pillow 实现，不依赖 numpy。
+
+    口径沿用原实测标定：某像素三通道绝对差之 **和** > 30 计为一个变化像素。
+    该阈值与 `_UI_LIVE_DIFF_MIN = 3000` 配套（真实重绘约 11 万像素），
+    不要单独调其中一个。
+
+    Pillow 的 `ImageChops.add` 不接受 'I' 模式（会抛 ValueError），
+    故这里用 zip 直接逐像素求和 —— 探针每轮只调两次，性能足够。
+    """
     try:
         if a is None or b is None:
             return 0
         if a.size != b.size:
             return 10 ** 9
-        na = np.asarray(a.convert("RGB"), dtype=np.int16)
-        nb = np.asarray(b.convert("RGB"), dtype=np.int16)
-        return int((np.abs(na - nb).sum(axis=2) > 30).sum())
+        diff = ImageChops.difference(a.convert("RGB"), b.convert("RGB"))
+        r, g, bl = diff.split()
+        dr, dg, db = r.tobytes(), g.tobytes(), bl.tobytes()
+        return sum(1 for i in range(len(dr))
+                   if dr[i] + dg[i] + db[i] > 30)
     except Exception:
         return 0
 
@@ -865,8 +798,8 @@ def print_window(hwnd):
     ctypes.windll.user32.ReleaseDC(hwnd, hdc)
     if not ok:
         return None
-    arr = np.frombuffer(buf, dtype=np.uint8).reshape((h, w, 4))
-    return Image.fromarray(arr[:, :, [2, 1, 0]]), (l, t, r, b)
+    # 直接用 PIL 解 BGRA 字节缓冲，省掉 numpy 中转（通道序 B,G,R,A → 取前 3 通道反转）
+    return Image.frombytes("RGBA", (w, h), buf).convert("RGB"), (l, t, r, b)
 
 
 def virtual_screen():
@@ -877,7 +810,7 @@ def virtual_screen():
 
 
 def _grab_screen_gdi(l, t, r, b):
-    """纯 ctypes GDI 的屏幕区域抓取（PrintWindow 失败 + 无 mss 时的最终兜底）。"""
+    """屏幕区域抓取（GDI BitBlt，纯 ctypes）。PrintWindow 失效时使用。"""
     user32 = ctypes.windll.user32
     gdi32 = ctypes.windll.gdi32
     w, h = int(r - l), int(b - t)
@@ -911,12 +844,12 @@ def _grab_screen_gdi(l, t, r, b):
     gdi32.DeleteDC(hdc_mem)
     user32.ReleaseDC(0, hdc_screen)
 
-    arr = np.frombuffer(buf.raw, dtype=np.uint8).reshape((h, w, 4))
-    return Image.fromarray(arr[:, :, [2, 1, 0]]), (int(l), int(t), int(r), int(b))
+    # 直接用 PIL 解 BGRA 字节缓冲（GDI 的 biBitCount=32 输出 BGRA 序）
+    return Image.frombytes("RGBA", (w, h), buf.raw).convert("RGB"), (int(l), int(t), int(r), int(b))
 
 
 def grab_screen_fallback(hwnd):
-    """PrintWindow 失败时的兜底（屏幕区域截图）。mss 缺失时降级为 GDI BitBlt。"""
+    """PrintWindow 失败时的抓屏方案（GDI BitBlt 抓窗口所在屏幕区域）。"""
     l, t, r, b = win32gui.GetWindowRect(hwnd)
     try:
         mi = win32api.GetMonitorInfo(
@@ -931,11 +864,7 @@ def grab_screen_fallback(hwnd):
     r, b = min(r, vx1), min(b, vy1)
     if r <= l or b <= t:
         l, t, r, b = win32gui.GetWindowRect(hwnd)
-    if mss is None:
-        return _grab_screen_gdi(l, t, r, b)
-    with mss.mss() as sct:
-        img = sct.grab({"left": int(l), "top": int(t), "width": int(r - l), "height": int(b - t)})
-        return Image.frombytes("RGB", img.size, img.rgb), (l, t, r, b)
+    return _grab_screen_gdi(l, t, r, b)
 
 
 def capture(hwnd):
@@ -949,23 +878,8 @@ def capture(hwnd):
 
 # ────────────────────────────── OCR ──────────────────────────────
 def ocr_pil(pil, ox=0, oy=0, min_score=0.0):
-    """OCR 一张图，返回 [(cx, cy, score, text)]（绝对坐标 = 内部坐标 + 偏移）。
-    v7.9：按后端分发 —— winrt（系统 OCR）或 rapidocr，接口不变。"""
-    backend = _ensure_backend()
-    if backend == "winrt":
-        data = _ocr_winrt_raw(pil)
-        out = _winrt_hits(data, ox, oy)
-    else:
-        img = np.array(pil.convert("RGB"))
-        res, _ = _RAPID_ENGINE(img)
-        out = []
-        for item in (res or []):
-            pts = np.array(item[0], dtype=np.float32)
-            try:
-                sc, txt = float(item[2]), str(item[1])
-            except Exception:
-                sc, txt = float(item[1]), str(item[2])
-            out.append((int(pts[:, 0].mean()) + ox, int(pts[:, 1].mean()) + oy, sc, txt))
+    """OCR 一张图，返回 [(cx, cy, score, text)]（绝对坐标 = 内部坐标 + 偏移）。"""
+    out = _ocr_hits(_ocr_winrt_raw(pil), ox, oy)
     return [h for h in out if h[2] >= min_score]
 
 
@@ -1117,23 +1031,139 @@ def click(x, y, label=""):
     log(f"点击 ({int(x)}, {int(y)}) [{label}]")
 
 
+def _find_green_bar(pil, rect):
+    """在**侧栏底部**找出更新条的绿色实心胶囊，返回其 bbox（绝对坐标）。
+
+    实现：只扫侧栏带宽的下部，找「绿」像素（G 明显高于 R、B）。
+    纯 Pillow，无新依赖。返回 (gx0, gy0, gx1, gy1) 或 None。
+
+    v8.0 收紧：要求**连续 ≥3 行**都含绿像素才计入 bbox。
+    真实的实心胶囊是一大片连续的绿色行；孤立行/间隔行是无关 UI 元素（图标、
+    绿色文字等），不应算入。此前不做连续行校验导致 bbox 虚大（实测
+    (37,901,384,989) vs 真值 (48,963,395,1000)），偏差源于 y901 附近的
+    散落绿像素被一同计入了 ymin。
+    """
+    l, t, r, b = rect
+    # 只看侧栏左下角：更新条固定在侧栏最底，且横向不超过侧栏带宽的 1.6 倍
+    x0 = l
+    x1 = min(r, l + int((r - l) * 0.30))
+    y0 = max(t, b - int((b - t) * 0.14))
+    y1 = b
+    crop = pil.crop((x0 - l, y0 - t, x1 - l, y1 - t)).convert("RGB")
+    w, h = crop.size
+    px = crop.load()
+
+    def is_green(pr, pg, pb):
+        return pg > 120 and pg - pr > 40 and pg - pb > 40
+
+    # 按行统计绿像素：每行的 (min_x, max_x, count)
+    row_info = {}  # y -> (min_x, max_x, count)
+    for y in range(h):
+        xmin, xmax, cnt = w, -1, 0
+        for x in range(w):
+            if is_green(*px[x, y]):
+                cnt += 1
+                if x < xmin:
+                    xmin = x
+                if x > xmax:
+                    xmax = x
+        if cnt >= 10:  # 至少 10 个绿像素才算"此行有绿"
+            row_info[y] = (xmin, xmax, cnt)
+
+    if len(row_info) < 3:
+        return None
+
+    # 找最长连续行段（真正的实心胶囊是成片的）
+    sorted_ys = sorted(row_info.keys())
+    best_run = []
+    cur_run = [sorted_ys[0]]
+    for i in range(1, len(sorted_ys)):
+        if sorted_ys[i] == sorted_ys[i - 1] + 1:
+            cur_run.append(sorted_ys[i])
+        else:
+            if len(cur_run) > len(best_run):
+                best_run = cur_run
+            cur_run = [sorted_ys[i]]
+    if len(cur_run) > len(best_run):
+        best_run = cur_run
+
+    if len(best_run) < 3:   # 至少 3 行连续才算胶囊条
+        return None
+
+    # 用连续段内的行数据求 bbox
+    gx0 = min(row_info[y][0] for y in best_run) + x0
+    gx1 = max(row_info[y][1] for y in best_run) + x0
+    gy0 = best_run[0] + y0
+    gy1 = best_run[-1] + y0
+
+    # v8.0：必须够「宽」才认作更新条。侧栏底部另有小号绿色图标（约 46px 宽，
+    # 实测 x41..87），会触发误判为更新条 → 点错 ✕（实测点到白色卡片）。
+    # 真正的更新条绿胶囊宽约 350px（实测 x48..395），用宽度阈值排除小图标。
+    if (gx1 - gx0) < 150:
+        return None
+    return (gx0, gy0, gx1, gy1)
+
+
 def dismiss_update_bar(hwnd):
     """关闭侧栏底部「新版本就绪 / 更新日志 / 重启升级」更新提示条。
 
-    2026-10-08 实测：该更新条贴住侧栏最底部，会盖住账户入口，
-    导致 T2 复核（账户菜单 → Buddy加油站 面板）无法进入。
-    关闭 × 位于条右上角：实测「重启升级」按钮 @(300,1013) → × @(355,992)，
-    即相对偏移 (+55, -21)（窗口相对，与实际窗口尺寸无关）。
+    该更新条贴住侧栏最底部、**盖住账户行**，不关掉就进不了账户菜单 → T2 无从复核。
+
+    定位方式（v8.0 纯像素，不靠 OCR —— 实测 OCR **读不到** ✕）：
+      1. 先按几何在侧栏底部找**绿色实心胶囊**（更新条本体）→ bbox；
+      2. ✕ 是一个**白底圆 + 深灰笔画的圆钮**，压在绿胶囊右上角之外的白色卡片上，
+         其水平位置在绿胶囊**右缘再往右一点点**、纵向在绿胶囊**上缘之上**。
+         故：以绿胶囊 bbox 为基准，在「右侧 + 上方」的小窗口里找那个白圆。
+
+    实测标定（本机 1942x1042 副屏窗口，窗口相对坐标）：
+      绿胶囊 x 48..395 / y 963..1000；✕ 圆心 ≈ (437, 947)。
+      即 ✕x ≈ 绿右缘 + 42，✕y ≈ 绿上缘 − 16。
+    不写死这个偏移：改为在候选窗口里**找白圆**，取圆心，跨机器/缩放仍然成立。
+
     ⚠ 切勿点「重启升级」（会重启客户端）。
+    返回 True 表示已发出关闭点击（含复核结果日志）。
     """
     pil, rect = capture(hwnd)
-    hits = ocr_pil(pil, rect[0], rect[1])
-    bar = best_hit_any(hits, ("重启升级", "新版本就绪"), 0.5)[0]
+    bar = _find_green_bar(pil, rect)
     if not bar:
+        log("[关闭更新条] 侧栏底部未发现绿色更新条")
         return False
-    dx, dy = (55, -21) if "重启" in norm_txt(bar[3]) else (281, -21)
-    click(bar[0] + dx, bar[1] + dy, "close-update-bar")
+    gx0, gy0, gx1, gy1 = bar
+    log(f"[关闭更新条] 绿条 bbox=({gx0},{gy0},{gx1},{gy1})")
+
+    # ── ✕ 定位：用「已验证的几何偏移」──
+    # ✕ 是「白底圆 + 深灰笔画」的小圆钮，压在绿胶囊右缘之外、上缘之上的白色卡片上。
+    # 实测标定（本机 1942x1042 抓帧，窗口相对坐标）：绿胶囊 x48..395 / y963..1000，
+    #   ✕ 圆心 ≈ (437, 947)，即 ✕x = 绿右缘 + 42、✕y = 绿上缘 − 16。
+    # ⚠ OCR 读不到 ✕（纯图形按钮），像素 blob 又因 ✕ 压在白卡上而与之粘连、无法孤立，
+    #   故直接采用已两次验真的几何偏移，最稳、零额外依赖。
+    # 安全校验：若预测点落在「明显非按钮」的暗区（说明布局漂移），则不点，返回 False
+    #   （避免误伤；更新条本来就在侧栏最底，误点几乎无意义，留待下一轮/用户手动处理）。
+    tx, ty = gx1 + 42, gy0 - 16
+    l, t = rect[0], rect[1]
+    # 转 pil 内部坐标取色
+    ix, iy = tx - l, ty - t
+    sample = None
+    if 0 <= ix < pil.width and 0 <= iy < pil.height:
+        sample = pil.convert("RGB").getpixel((ix, iy))
+    if sample is not None:
+        r, g, b = sample
+        # 期望 ✕ 区域是「白/浅灰圆」——亮度高；若是深色（布局漂移）则放弃
+        if max(r, g, b) < 200:
+            log(f"[关闭更新条] 预测点 ({tx},{ty}) 采样到暗色 {sample}，"
+                f"疑似布局漂移 → 不点击，交由用户手动关闭")
+            return False
+    log(f"[关闭更新条] ✕ 几何定位 → 点 ({tx},{ty})  [采样={sample}]")
+
+    click(tx, ty, "close-update-bar")
+    time.sleep(0.6)
+
+    # 复核：再抓一帧，确认绿条已消失
+    pil2, _ = capture(hwnd)
+    gone = _find_green_bar(pil2, rect) is None
+    log(f"[关闭更新条] 复核：绿条{'已消失 ✓' if gone else '仍在 ✗'}")
     return True
+
 
 
 def find_account_hit(hits, rect):
@@ -1164,8 +1194,12 @@ def find_account_hit(hits, rect):
     anchors = [h for h in hits if is_card_hit(h)]
     card_bottom = max((h[1] for h in anchors), default=None)
 
+    # 排除噪声：卡片自身文字 + **更新提示条**。
+    # ⚠ 更新条（「新版本就绪 / 更新日志 / 就绪」）固定贴在侧栏最底、**盖住账户行**，
+    #   且它的 y 比账户行更靠底 —— 不过滤就会把它当成账户行点下去（实测故障）。
     NOISE = ("已使用", "升级", "Buddy应用", "每日可领", "累计领取", "已领",
-             "今日已领", "立即领取", "结束", "加油站", "体验Buddy应用", "积分")
+             "今日已领", "立即领取", "结束", "加油站", "体验Buddy应用", "积分",
+             "新版本就绪", "新版本", "重启升级", "更新日志", "就绪", "版本就绪")
     cands = []
     for h in hits:
         if not (l <= h[0] <= x_max and h[1] >= y_min):
@@ -1609,17 +1643,6 @@ def fast_claim(hwnd, rect, cache):
     return res
 
 
-def scroll_sidebar(rect, clicks=18, direction=-1):
-    """把侧栏滚到最底（用于兜底路径里寻找可能存在的卡片）。"""
-    l, t, r, b = rect
-    mx, my = int(l + 150), int(t + (b - t) * 0.55)
-    move_to(mx, my)
-    for _ in range(clicks):
-        scroll(direction)
-        time.sleep(0.08)
-    time.sleep(0.8)
-
-
 def try_claim(hwnd, max_clicks=3):
     """命中 S1 → 点击 → 强校验。返回 'SUCCESS' / 'ALREADY_DONE' / None(S3)。
 
@@ -1751,11 +1774,11 @@ def reset_ui_state(hwnd, tries=2):
 
 def main():
     log("=" * 60)
-    log("WorkBuddy 每日积分 - GUI 自动化 v7.9 (Windows系统OCR + 快路径缓存 + 区域OCR + 账户菜单主路径)")
+    log("WorkBuddy 每日积分 - GUI 自动化 v8.0 (Windows系统OCR + 快路径缓存 + 区域OCR + 账户菜单主路径)")
     log(f"DPI 模式: {DPI_MODE}")
-    # v7.9：OCR 后端探测提前到启动时 —— 探测要起一次 PS 子进程（~3s），
+    # OCR 环境校验放启动时：要起一次 PS 子进程（~1.5s），
     # 若嵌在快路径的「点面板→等锚点」时序里会吃掉等待窗口、造成假性失效。
-    _ensure_backend()
+    _ocr_check_env()
 
     wins = find_window()
     if not wins:
@@ -1786,7 +1809,10 @@ def main():
         if res:
             log(f"[路径0] 快路径命中：{res}")
             return True, res
-        log("[路径0] 快路径不可用 → 本次回退完整流程（仍会正常完成）")
+        log("[路径0] 快路径不可用 → 尝试关闭更新条后回退完整流程")
+        # 快路径失败可能正是因为更新条盖住了账户行 → 先尝试关掉
+        dismiss_update_bar(hwnd)
+        time.sleep(0.5)
     else:
         log("[路径0] 无快路径缓存（本机首跑，或缓存已失效）→ 走完整流程")
 
@@ -1827,6 +1853,9 @@ def main():
     #   铁律：快路径必须能自动失效回退（见 fast_claim / drop_fastpath 注释）。
 
     # ── 路径 1（主路径）：账户菜单 → Buddy加油站 面板 ──
+    # v8.0：进入账户菜单之前先尝试关闭更新条（它盖在账户行上面，不关就点不到账户行）
+    dismiss_update_bar(hwnd)
+    time.sleep(0.5)
     log("[路径1] 主路径：账户菜单 → Buddy加油站 完整面板")
     res = try_claim_via_panel(hwnd, max_clicks=2)
     if res:
@@ -1841,18 +1870,11 @@ def main():
     if res:
         return True, res
 
-    # ── 路径 3：滚侧栏后再读卡片 ──
-    for attempt in range(2):
-        log(f"[路径3.{attempt}] 滚动侧栏到最底")
-        scroll_sidebar(rect, clicks=18, direction=-1)
-        res = try_claim(hwnd, max_clicks=2)
-        if res:
-            return True, res
-        log(f"[路径3.{attempt}] 反向试探")
-        scroll_sidebar(rect, clicks=6, direction=1)
-        res = try_claim(hwnd, max_clicks=2)
-        if res:
-            return True, res
+    # ❌ v8.0 删除「滚任务列表找卡片」子路径（原路径3.0/3.1）。
+    #    理由（实测 + 用户指出）：账户行与**任务列表是两个互不相干的控件**，
+    #    滚动任务列表**不可能**让账户行露出来；而卡片区在侧栏底部，
+    #    滚动任务列表也不会移动它。这条路径纯属无效动作（还会把侧栏滚乱），
+    #    已彻底移除，相关 scroll_sidebar() 函数一并删除。
 
     # ── 路径 3：整屏 OCR 找「立即领取」按钮（不限卡片区） ──
     pil, rect = capture(hwnd)
@@ -1877,59 +1899,10 @@ def main():
         if res:
             return True, res
 
-    # ── 路径 4：黑按钮模板兜底 ──
-    btn = locate_claim_button(pil, rect)
-    if btn:
-        log(f"[路径4] 模板命中黑按钮 {btn} → 点击")
-        pil.save(PRE_RESULT)
-        click(btn[0], btn[1], "template")
-        time.sleep(3.5)
-        res = try_claim(hwnd, max_clicks=2)
-        if res:
-            return True, res
-
     log("[FAIL] 全部路径均未获得 T1/T2 领取证据 → UNKNOWN（agent 未搞定，不得结案）")
     pil.save(OUTPUT_RESULT)
     log("CLAIM_STATUS=UNKNOWN")
     return False, "UNKNOWN"
-
-
-def locate_claim_button(pil_img, rect):
-    """模板匹配定位黑色「立即领取」按钮；返回屏幕绝对坐标。
-
-    2026-10-13：模板文件可能不存在（分发时不带 PNG 资产）。
-    此时优雅返回 None —— 这只是**兜底路径**，主线靠文案锚点（路径 1/2/2.5/3），
-    缺模板不影响正常领取，故仅提示不报错。
-
-    2026-10-14：cv2 由必装改为可选。分发版不带模板 PNG ⇒ 本函数不会真正执行，
-    装 opencv-python 纯属浪费 ~60MB。缺 cv2 时同样优雅跳过。
-    """
-    if not os.path.exists(BLACK_BTN_TPL):
-        log("[模板兜底] 模板文件不存在（分发版可不带）→ 跳过")
-        return None
-    if cv2 is None:
-        log("[模板兜底] 未安装 opencv-python → 跳过（属于可选依赖，不影响领取）")
-        return None
-    try:
-        tmpl = cv2.imread(BLACK_BTN_TPL, cv2.IMREAD_COLOR)
-        img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-    except Exception:
-        return None
-    if tmpl is None:
-        return None
-    best = None
-    for s in np.linspace(0.5, 1.6, 23):
-        tw, th = int(tmpl.shape[1] * s), int(tmpl.shape[0] * s)
-        if tw < 5 or th < 5 or tw > img.shape[1] or th > img.shape[0]:
-            continue
-        tt = cv2.resize(tmpl, (tw, th))
-        res = cv2.matchTemplate(img, tt, cv2.TM_CCOEFF_NORMED)
-        _, mx, _, ml = cv2.minMaxLoc(res)
-        if best is None or mx > best[0]:
-            best = (mx, ml, tw, th)
-    if best is None or best[0] < 0.75:
-        return None
-    return best[1][0] + best[2] // 2 + rect[0], best[1][1] + best[3] // 2 + rect[1]
 
 
 if __name__ == "__main__":

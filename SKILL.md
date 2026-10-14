@@ -1,6 +1,6 @@
 ---
 name: workbuddy-daily-credits
-version: 7.9.0
+version: 8.0.0
 description: 自动领取 WorkBuddy 桌面客户端（Buddy加油站）的每日 100 通用积分，并做双证复核。This skill should be used when the user wants to install this skill and enable daily auto-claim / 安装这个 skill 并每天自动领积分 / claim WorkBuddy daily credits / 每日积分 / 签到 / Buddy加油站 / 领取积分, or set up an unattended daily claim task, or diagnose why a previous claim failed. 安装本 skill 时必须同时创建每日常规自动化任务（见第〇节）。覆盖 Windows 桌面客户端的窗口定位、DPI 适配、账户菜单→Buddy加油站面板导航、三态判定与自愈重试。
 agent_created: true
 ---
@@ -68,8 +68,8 @@ test -f "$HOME/.workbuddy/skills/workbuddy-daily-credits/SKILL.md" && echo OK
 ```
 领取 WorkBuddy 今日积分，遵循 workbuddy-daily-credits skill 执行：
 1. 确认 WorkBuddy 桌面客户端进程在运行（tasklist | grep -i workbuddy）；若不在，尝试启动并最多等 10 分钟。
-2. 检查依赖：python -c "import win32gui,PIL,numpy; print('OK')"；缺哪个就 python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple <包名>，不要新建 venv，不要装 venv。
-   （OCR 用 Windows 系统自带引擎，零额外依赖。rapidocr / pyautogui / mss 均为可选兜底，缺失自动降级，无需安装。）
+2. 检查依赖：python -c "import win32gui,PIL; print('OK')"；缺哪个就 python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple <包名>，不要新建 venv，不要装 venv。
+   （OCR 用 Windows 系统自带引擎，零额外依赖。）
 3. 运行 skill 目录下的 scripts/claim_gui_final.py（Windows 用户级 skill 目录 ~/.workbuddy/skills/workbuddy-daily-credits/scripts/），用 Read 读同目录 claim_run.log，不要看退出码。
 4. 运行 scripts/t2_check.py 取 T2 数值（形如 [T2] (天数, 分数)），与上次对比应为 +1 天 / +100 分。
 5. 结论只取 SUCCESS / ALREADY_DONE / FAILED 之一，并附证据（T2 数值、截图路径、走过的路径序号）。
@@ -90,7 +90,7 @@ test -f "$HOME/.workbuddy/skills/workbuddy-daily-credits/SKILL.md" && echo OK
 
 #### 第 3 步：一句话回报（不要长篇）
 
-> 已装好 skill，并创建了每天 09:05 的自动领取任务（可在侧边栏「自动化」里改时间或停用）。依赖只需 3 个小包（约 20MB，秒级装完），OCR 直接用 Windows 系统自带引擎。首次运行约 40 秒，之后约 12 秒。注意任务只在 WorkBuddy 客户端开着时才会跑。
+> 已装好 skill，并创建了每天 09:05 的自动领取任务（可在侧边栏「自动化」里改时间或停用）。依赖只需 2 个包（约 15MB，秒级装完），OCR 直接用 Windows 系统自带引擎。首次运行约 40 秒，之后约 12 秒。注意任务只在 WorkBuddy 客户端开着时才会跑。
 
 ### 唯一可以不建任务的情况
 
@@ -151,33 +151,26 @@ tasklist | grep -i workbuddy
 
 ### 步骤 1：确认依赖，缺失则安装
 
-**核心依赖（仅 3 个小包，约 20MB，秒级装完）**：
+**核心依赖（仅 2 个包，约 15MB，秒级装完）**：
 
 ```bash
-python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pywin32 Pillow numpy
+python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pywin32 Pillow
 ```
 
 **OCR 用 Windows 系统自带引擎**（Windows.Media.Ocr，Win10/11 内置中文支持，
 经 `scripts/ocr_winrt.ps1` 调用，零 pip 依赖，实测 ~1.4s/次）——
 **不需要装 rapidocr / onnxruntime / opencv 那一整套 250MB 的包。**
 
-**可选依赖（不装也能跑，缺了自动降级）**：
+鼠标/键盘/滚轮走纯 ctypes（`SendInput`），抓屏走 GDI BitBlt / PrintWindow —— **零额外依赖**。
 
-| 包 | 作用 | 缺失时的降级 |
-|---|---|---|
-| `rapidocr-onnxruntime` | OCR 兜底后端 | 仅当 Windows 系统 OCR 不可用（如缺中文语言包）才需要；会连带装上 opencv 等约 250MB |
-| `pyautogui` | 鼠标/键盘事件 | 降级为 `SendInput` / `SetCursorPos`（纯 ctypes） |
-| `mss` | 屏幕抓取兜底（仅 PrintWindow 失败时用） | 降级为 GDI `BitBlt`（纯 ctypes） |
-
-> 2026-10-14 实测：仅装 3 个核心包，Windows OCR 后端即可完整跑通真实领取流程。
-> 若某台机器报「Windows 系统 OCR 不可用」，两条路任选其一：
-> ① 系统设置 → 时间和语言 → 语言 → 添加「中文(简体)」语言包（勾选 OCR）；
-> ② `python -m pip install rapidocr-onnxruntime`（脚本自动降级到 rapidocr）。
+> v8.0 起已删除全部可选降级分支（pyautogui / mss / rapidocr 等），仅保留唯一路径。
+> 若某台机器报「Windows 系统 OCR 不可用」：
+> 系统设置 → 时间和语言 → 语言 → 添加「中文(简体)」语言包（勾选 OCR）。
 
 **先检测再安装**（避免重复下载）：
 
 ```bash
-python -c "import win32gui,PIL,numpy; print('CORE_DEPS_OK')"
+python -c "import win32gui,PIL; print('CORE_DEPS_OK')"
 ```
 
 看到 `CORE_DEPS_OK` 就够开工了。若报缺包，只装缺的那个（命令同上，换个包名）。
@@ -190,7 +183,7 @@ python -c "import win32gui,PIL,numpy; print('CORE_DEPS_OK')"
 python <skill目录>/scripts/claim_gui_final.py
 ```
 
-脚本会自行完成：窗口定位 → DPI 适配 → **快路径（若有缓存）** →（未命中则）UI 复位 → 渲染层探针 → 路径 1→2→3→4→5 依次尝试 → 点击 → 回读强校验。
+脚本会自行完成：窗口定位 → DPI 适配 → **快路径（若有缓存）** →（未命中则）UI 复位 → 渲染层探针 → 路径 1→2→3 依次尝试 → 点击 → 回读强校验。
 
 **读日志，别读退出码。** 关键输出行：
 
@@ -282,9 +275,7 @@ python <skill目录>/scripts/t2_check.py
 | **0（最优先）** | **快路径：复用本机已固化的成功坐标** | **T1 + T2（与路径 1 同标准）** | 本机曾成功过（有 `claim_fastpath.json`） |
 | **1（主路径）** | **账户菜单 → Buddy加油站完整面板** | **T1 + T2（最强）** | 无缓存 / 缓存失效；唯一可靠入口 |
 | **2** | 直读侧栏底部区域 | T1 | 极少数版本/页面确实存在侧栏卡片时 |
-| **3** | 滚侧栏到底再读 | T1 | 同上，卡片被滚动影响时 |
-| **4** | 整屏 OCR 搜「立即领取」 | T1 | 面板/卡片位置未知 |
-| **5** | 黑色按钮模板匹配 | T1 | 文案 OCR 全部失败（可无此模板） |
+| **3** | 整屏 OCR 搜「立即领取」 | T1 | 面板/卡片位置未知 |
 
 **路径 0 与路径 1 的关系**：不是两套逻辑，而是「同一套逻辑，路径 0 跳过了找坐标的搜索」——
 两者最终都调用同一个 `claim_on_panel()` 做判定。所以**判定标准永远一致**。
