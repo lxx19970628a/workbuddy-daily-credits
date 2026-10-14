@@ -80,7 +80,7 @@ WorkBuddy 的每日积分只能在**桌面客户端**领，网页端没有入口
 ```
 定位窗口（按 exe 路径过滤，排除浏览器）
     ↓
-【快路径】有本机成功坐标缓存？ → 直接复用坐标导航 + 窄条 OCR 校验  ← 首次跑通后 ~13s
+【快路径】有本机成功坐标缓存？ → 直接复用坐标导航 + 窄条 OCR 校验  ← 首次跑通后 ~12s
     ↓ 无缓存 / 缓存失效
 UI 状态复位 + 还原最小化窗口 + 渲染层存活探针（检测"陈旧帧"）
     ↓
@@ -101,8 +101,8 @@ UI 状态复位 + 还原最小化窗口 + 渲染层存活探针（检测"陈旧�
 
 | | 耗时（本机实测） |
 |---|---|
-| 首次（完整流程：探测 + 定位） | ~39s |
-| 之后（快路径：复用坐标） | **~13s** |
+| 首次（完整流程：探测 + 定位） | ~40s |
+| 之后（快路径：复用坐标） | **~12s** |
 
 **它为什么安全**（这是设计重点）：
 
@@ -148,7 +148,7 @@ UI 状态复位 + 还原最小化窗口 + 渲染层存活探针（检测"陈旧�
 
 ## 安装（一句话，装完就是「已开启自动领取」）
 
-**最新版本：v7.8.0** ·
+**最新版本：v7.9.0** ·
 下载 zip：[`workbuddy-daily-credits.zip`](https://github.com/lxx19970628a/workbuddy-daily-credits/releases/latest/download/workbuddy-daily-credits.zip) ·
 [全部 Release](https://github.com/lxx19970628a/workbuddy-daily-credits/releases)
 
@@ -227,9 +227,26 @@ Skill 会自动：确认客户端在运行 → 检查/安装依赖 → 执行领
 - **WorkBuddy 桌面客户端已安装并登录**
 - **Python 3.10+**（依赖由 skill 引导自动安装，无需手动准备）
 
-依赖清单：`pywin32` `Pillow` `numpy` `opencv-python` `rapidocr-onnxruntime` `pyautogui` `mss`
+### 依赖（新机器只需 1 条命令，3 个小包约 20MB，秒级装完）
 
-> 首次运行 `rapidocr-onnxruntime` 会下载约 15MB 的 OCR 模型，需要网络。
+```bash
+python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pywin32 Pillow numpy
+```
+
+**OCR 直接用 Windows 系统自带引擎**（Windows.Media.Ocr，Win10/11 内置中文支持，
+经 `scripts/ocr_winrt.ps1` 调用，零 pip 依赖，实测 ~1.4s/次）——
+**不需要装 rapidocr / onnxruntime / opencv 那一整套约 250MB 的依赖。**
+
+以下均为**可选**（缺失自动降级，无需安装）：
+
+| 包 | 作用 | 缺失时的降级 |
+|---|---|---|
+| `rapidocr-onnxruntime` | OCR 兜底后端 | 仅当 Windows 系统 OCR 不可用（如缺中文语言包）才需要；装它可运行 `python -m pip install rapidocr-onnxruntime` |
+| `pyautogui` | 鼠标 / 键盘事件 | 降级为纯 ctypes 的 `SendInput` / `SetCursorPos` |
+| `mss` | 屏幕抓取兜底 | 降级为纯 ctypes 的 GDI `BitBlt` |
+
+> 实测（2026-10-14）：仅装 3 个核心包，Windows OCR 后端即可完整跑通真实领取流程。
+> 若某台机器报「Windows 系统 OCR 不可用」：补装中文语言包（含 OCR），或装 rapidocr 兜底。
 
 ## 已知限制
 
@@ -263,6 +280,7 @@ workbuddy-daily-credits/          ← 仓库根 = skill 目录
 │   └── troubleshooting.md        # 故障模式详录（含误诊案例）
 ├── scripts/
 │   ├── claim_gui_final.py        # 主领取脚本（自包含全流程）
+│   ├── ocr_winrt.ps1             # Windows 系统 OCR 调用器（零依赖，v7.9 起默认后端）
 │   └── t2_check.py               # T2 数值复核工具
 ├── README.md                     # 本文件（仓库首页展示用）
 ├── PUBLISH.md                    # 发布与分发指南（维护者看）

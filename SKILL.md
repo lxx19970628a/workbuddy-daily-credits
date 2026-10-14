@@ -1,6 +1,6 @@
 ---
 name: workbuddy-daily-credits
-version: 7.8.0
+version: 7.9.0
 description: 自动领取 WorkBuddy 桌面客户端（Buddy加油站）的每日 100 通用积分，并做双证复核。This skill should be used when the user wants to install this skill and enable daily auto-claim / 安装这个 skill 并每天自动领积分 / claim WorkBuddy daily credits / 每日积分 / 签到 / Buddy加油站 / 领取积分, or set up an unattended daily claim task, or diagnose why a previous claim failed. 安装本 skill 时必须同时创建每日常规自动化任务（见第〇节）。覆盖 Windows 桌面客户端的窗口定位、DPI 适配、账户菜单→Buddy加油站面板导航、三态判定与自愈重试。
 agent_created: true
 ---
@@ -68,7 +68,8 @@ test -f "$HOME/.workbuddy/skills/workbuddy-daily-credits/SKILL.md" && echo OK
 ```
 领取 WorkBuddy 今日积分，遵循 workbuddy-daily-credits skill 执行：
 1. 确认 WorkBuddy 桌面客户端进程在运行（tasklist | grep -i workbuddy）；若不在，尝试启动并最多等 10 分钟。
-2. 检查依赖：python -c "import win32gui,PIL,numpy,cv2,rapidocr_onnxruntime,pyautogui,mss"；缺哪个就 python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple <包名>，不要新建 venv。
+2. 检查依赖：python -c "import win32gui,PIL,numpy; print('OK')"；缺哪个就 python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple <包名>，不要新建 venv，不要装 venv。
+   （OCR 用 Windows 系统自带引擎，零额外依赖。rapidocr / pyautogui / mss 均为可选兜底，缺失自动降级，无需安装。）
 3. 运行 skill 目录下的 scripts/claim_gui_final.py（Windows 用户级 skill 目录 ~/.workbuddy/skills/workbuddy-daily-credits/scripts/），用 Read 读同目录 claim_run.log，不要看退出码。
 4. 运行 scripts/t2_check.py 取 T2 数值（形如 [T2] (天数, 分数)），与上次对比应为 +1 天 / +100 分。
 5. 结论只取 SUCCESS / ALREADY_DONE / FAILED 之一，并附证据（T2 数值、截图路径、走过的路径序号）。
@@ -89,7 +90,7 @@ test -f "$HOME/.workbuddy/skills/workbuddy-daily-credits/SKILL.md" && echo OK
 
 #### 第 3 步：一句话回报（不要长篇）
 
-> 已装好 skill，并创建了每天 09:05 的自动领取任务（可在侧边栏「自动化」里改时间或停用）。首次运行约 40 秒（含 OCR 模型下载），之后约 13 秒。注意任务只在 WorkBuddy 客户端开着时才会跑。
+> 已装好 skill，并创建了每天 09:05 的自动领取任务（可在侧边栏「自动化」里改时间或停用）。依赖只需 3 个小包（约 20MB，秒级装完），OCR 直接用 Windows 系统自带引擎。首次运行约 40 秒，之后约 12 秒。注意任务只在 WorkBuddy 客户端开着时才会跑。
 
 ### 唯一可以不建任务的情况
 
@@ -150,22 +151,38 @@ tasklist | grep -i workbuddy
 
 ### 步骤 1：确认依赖，缺失则安装
 
-脚本依赖：`pywin32`, `Pillow`, `numpy`, `opencv-python`, `rapidocr-onnxruntime`, `pyautogui`, `mss`
+**核心依赖（仅 3 个小包，约 20MB，秒级装完）**：
+
+```bash
+python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pywin32 Pillow numpy
+```
+
+**OCR 用 Windows 系统自带引擎**（Windows.Media.Ocr，Win10/11 内置中文支持，
+经 `scripts/ocr_winrt.ps1` 调用，零 pip 依赖，实测 ~1.4s/次）——
+**不需要装 rapidocr / onnxruntime / opencv 那一整套 250MB 的包。**
+
+**可选依赖（不装也能跑，缺了自动降级）**：
+
+| 包 | 作用 | 缺失时的降级 |
+|---|---|---|
+| `rapidocr-onnxruntime` | OCR 兜底后端 | 仅当 Windows 系统 OCR 不可用（如缺中文语言包）才需要；会连带装上 opencv 等约 250MB |
+| `pyautogui` | 鼠标/键盘事件 | 降级为 `SendInput` / `SetCursorPos`（纯 ctypes） |
+| `mss` | 屏幕抓取兜底（仅 PrintWindow 失败时用） | 降级为 GDI `BitBlt`（纯 ctypes） |
+
+> 2026-10-14 实测：仅装 3 个核心包，Windows OCR 后端即可完整跑通真实领取流程。
+> 若某台机器报「Windows 系统 OCR 不可用」，两条路任选其一：
+> ① 系统设置 → 时间和语言 → 语言 → 添加「中文(简体)」语言包（勾选 OCR）；
+> ② `python -m pip install rapidocr-onnxruntime`（脚本自动降级到 rapidocr）。
 
 **先检测再安装**（避免重复下载）：
 
 ```bash
-python -c "import win32gui,PIL,numpy,cv2,rapidocr_onnxruntime,pyautogui,mss; print('DEPS_OK')"
+python -c "import win32gui,PIL,numpy; print('CORE_DEPS_OK')"
 ```
 
-若报缺包，只装缺的那个：
-
-```bash
-python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple <缺的包>
-```
+看到 `CORE_DEPS_OK` 就够开工了。若报缺包，只装缺的那个（命令同上，换个包名）。
 
 > 用 Python 3.10+ 均可（脚本无版本特有语法）。**不要新建 venv**，除非用户明确要求隔离。
-> `rapidocr-onnxruntime` 首次运行会自动下载约 15MB 的 ONNX 模型，需要网络。
 
 ### 步骤 2：运行主脚本
 
@@ -201,8 +218,8 @@ python <skill目录>/scripts/t2_check.py
 
 | | 耗时（实测） | 说明 |
 |---|---|---|
-| 首次（完整流程） | ~39s | 探测账户行、菜单项，多次区域 OCR |
-| 之后（快路径） | **~13s** | 直接复用坐标 + 窄条 OCR 校验 |
+| 首次（完整流程） | ~40s | 探测账户行、菜单项，多次区域 OCR |
+| 之后（快路径） | **~12s** | 直接复用坐标 + 窄条 OCR 校验 |
 
 **它为什么是安全的**（这是设计重点，向用户解释时可以强调）：
 
@@ -371,6 +388,7 @@ python <skill目录>/scripts/t2_check.py
 ## 八、参考文件与运行产物
 
 - `scripts/claim_gui_final.py` — 主领取脚本（自包含，含全部自愈逻辑）
+- `scripts/ocr_winrt.ps1` — Windows 系统 OCR 调用器（零依赖 OCR 后端，v7.9 起默认）
 - `scripts/t2_check.py` — T2 数值复核工具
 - `references/troubleshooting.md` — 历史故障模式与根因详录（排查疑难时读）
 

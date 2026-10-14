@@ -149,8 +149,26 @@ D) **窗口还原修正**：最小化窗口的 `GetWindowRect` 返回 **-32000 �
 4) 不无条件 SW_MAXIMIZE；仅在最小化/未最大化时才恢复。
 5) 侧栏可能折叠 ⇒ OCR 找不到入口时滚动侧栏到底部再判。
 
-依赖：pyautogui, mss, Pillow, pywin32, opencv-python, rapidocr-onnxruntime
-运行：python claim_gui_final.py   （务必用系统 Python 3.14）
+依赖（核心，必装，共 3 个，约 20MB，秒级安装）：
+  v7.9（2026-10-14）：OCR 默认改走 **Windows 系统自带 OCR**（Windows.Media.Ocr，
+  Win10/11 内置中文支持，经 scripts/ocr_winrt.ps1 子进程调用，零 pip 依赖，
+  实测 ~1.4s/次，与 rapidocr 相当甚至更快）。rapidocr 全家桶（onnxruntime/
+  opencv/shapely/pyclipper…约 250MB）从必装降为**可选兜底**。
+
+  pywin32   窗口定位 / PrintWindow 抓帧 / ShowWindowAsync 还原
+  Pillow    图像容器与裁剪、放大
+  numpy     像素差探针（陈帧检测）
+
+依赖（可选，缺失自动降级，**不影响领取**）：
+  rapidocr-onnxruntime  OCR 兜底后端（仅当 Windows 系统 OCR 不可用 / 缺中文
+                        语言包时需要；正常 Windows 中文系统无需安装）
+  pyautogui             鼠标键盘事件（缺失时降级为 SendInput/SetCursorPos ctypes 实现）
+  mss                   屏幕抓取兜底（仅 PrintWindow 失败时用；缺失时降级为 GDI BitBlt）
+  opencv-python         模板匹配兜底（通常由 rapidocr 带入；缺失只影响模板路径）
+
+  → 实测：仅装 3 个核心包，Windows OCR 后端即可完整运行。
+
+运行：python claim_gui_final.py
 退出码：0 = SUCCESS / ALREADY_DONE；1 = UNKNOWN（= agent 没搞定，必须重试）
 """
 import ctypes
@@ -183,21 +201,154 @@ import sys
 import time
 import numpy as np
 
+# ── 核心依赖（缺失即无法工作，直接报错退出）──────────────────────────
+# 2026-10-14：OCR 默认改走 **Windows 系统自带 OCR**（Windows.Media.Ocr，经
+#   scripts/ocr_winrt.ps1 调用，零 pip 依赖）。rapidocr 全家桶（onnxruntime /
+#   opencv / shapely / pyclipper …约 250MB）降级为**可选兜底**。
 try:
-    import pyautogui
-    import mss
-    import cv2
     from PIL import Image
     import win32gui
     import win32con
     import win32api
     import win32process
-    from rapidocr_onnxruntime import RapidOCR
 except ImportError as e:
-    print(f"[FATAL] 缺少依赖: {e}")
+    print(f"[FATAL] 缺少核心依赖: {e}")
+    print("        请执行： python -m pip install pywin32 Pillow numpy")
     sys.exit(2)
 
-pyautogui.FAILSAFE = False
+# ── 可选依赖（缺失自动降级，不阻塞）─────────────────────────────────
+# 2026-10-14：rapidocr-onnxruntime 降级为可选 —— 仅当 Windows 系统 OCR 不可用时兜底。
+# pyautogui / mss 亦为可选（ctypes/GDI 已内置降级实现）。
+_OPT_MISSING = []
+
+try:
+    from rapidocr_onnxruntime import RapidOCR
+except ImportError:
+    RapidOCR = None
+    _OPT_MISSING.append("rapidocr-onnxruntime(可选,仅WindowsOCR不可用时需要)")
+
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = False
+except ImportError:
+    pyautogui = None
+    _OPT_MISSING.append("pyautogui")
+
+try:
+    import mss
+except ImportError:
+    mss = None
+    _OPT_MISSING.append("mss")
+
+try:
+    import cv2          # 通常由 rapidocr 带入；此处仍做容错，缺失只影响模板兜底
+except ImportError:
+    cv2 = None
+    _OPT_MISSING.append("opencv-python")
+
+
+def _mouse_event_input(flags, dx=0, dy=0, data=0):
+    """ctypes 版鼠标事件（SendInput），pyautogui 缺失时的降级实现。"""
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                    ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+                    ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+    class _INPUTunion(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT)]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_ulong), ("union", _INPUTunion)]
+
+    inp = INPUT()
+    inp.type = 0  # INPUT_MOUSE
+    inp.union.mi = MOUSEINPUT(dx, dy, data, flags, 0, None)
+    ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+
+def _key_event_input(vk, up=False):
+    """ctypes 版按键事件（SendInput），pyautogui 缺失时的降级实现。"""
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                    ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                    ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+    class _INPUTunion(ctypes.Union):
+        _fields_ = [("ki", KEYBDINPUT)]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_ulong), ("union", _INPUTunion)]
+
+    inp = INPUT()
+    inp.type = 1  # INPUT_KEYBOARD
+    # KEYEVENTF_KEYUP = 0x0002
+    inp.union.ki = KEYBDINPUT(vk, 0, 0x0002 if up else 0, 0, None)
+    ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+
+MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_WHEEL = 0x0800
+VK_ESCAPE = 0x1B
+
+
+def move_to(x, y, duration=None):
+    """移动鼠标到绝对坐标。优先 pyautogui，缺失时降级 SendInput。"""
+    x, y = int(x), int(y)
+    if pyautogui is not None:
+        try:
+            if duration:
+                pyautogui.moveTo(x, y, duration=duration)
+            else:
+                pyautogui.moveTo(x, y)
+            return
+        except Exception:
+            pass
+    # 降级：SetCursorPos 足够（不需要平滑动画）
+    ctypes.windll.user32.SetCursorPos(x, y)
+
+
+def click_at(x, y):
+    """在绝对坐标点击一次。优先 pyautogui，缺失时降级 SendInput。"""
+    x, y = int(x), int(y)
+    if pyautogui is not None:
+        try:
+            pyautogui.click(x, y)
+            return
+        except Exception:
+            pass
+    ctypes.windll.user32.SetCursorPos(x, y)
+    time.sleep(0.05)
+    _mouse_event_input(MOUSEEVENTF_LEFTDOWN)
+    time.sleep(0.03)
+    _mouse_event_input(MOUSEEVENTF_LEFTUP)
+
+
+def press_esc():
+    """按一次 Esc。优先 pyautogui，缺失时降级 SendInput。"""
+    if pyautogui is not None:
+        try:
+            press_esc()
+            return
+        except Exception:
+            pass
+    _key_event_input(VK_ESCAPE)
+    time.sleep(0.02)
+    _key_event_input(VK_ESCAPE, up=True)
+
+
+def scroll(direction):
+    """滚轮滚动。direction > 0 向上，< 0 向下。"""
+    if pyautogui is not None:
+        try:
+            scroll(direction)
+            return
+        except Exception:
+            pass
+    _mouse_event_input(MOUSEEVENTF_WHEEL, data=(120 if direction > 0 else -120))
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 # 产物一律**固定文件名、原地覆盖**（2026-10-13 改造）。
@@ -231,7 +382,106 @@ FASTPATH_SCHEMA = 1
 # 用模块级变量是为了不改动现有函数签名（改动面最小）。
 _LAST_NAV = {}
 
-OCR_ENGINE = RapidOCR()
+# ── OCR 后端（2026-10-14 双后端架构）─────────────────────────────────
+# 首选：Windows 系统自带 OCR（Windows.Media.Ocr，Win10/11 内置，中文开箱即用，
+#       经 scripts/ocr_winrt.ps1 子进程调用，零 pip 依赖，实测 ~1.4s/次）。
+# 兜底：rapidocr-onnxruntime（pip 装，仅当系统 OCR 不可用 / 中文语言包缺失时）。
+# 两者输出统一为 [(cx, cy, score, text)]，下游 judge()/parse_t2() 等零改动。
+_PS5_EXE = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                        r"System32\WindowsPowerShell\v1.0\powershell.exe")
+_PS1_OCR = os.path.join(BASE, "ocr_winrt.ps1")
+_CREATE_NO_WINDOW = 0x08000000
+OCR_BACKEND = None          # 'winrt' | 'rapidocr' | None(未探测)
+_RAPID_ENGINE = None
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef0-9A-Za-z]")
+
+
+def _norm_ocr_text(s):
+    """去掉 Windows OCR 在 CJK/数字字符间插入的空格（「立 即 领 取」→「立即领取」）。"""
+    return re.sub(r"(?<=[\u4e00-\u9fff0-9A-Za-z])\s+(?=[\u4e00-\u9fff0-9A-Za-z])", "", s or "").strip()
+
+
+def _ocr_winrt_raw(pil):
+    """调 ocr_winrt.ps1 识别一张 PIL 图，返回 {'lang':str,'lines':[...]}。
+    lang 为空或抛异常均视为后端不可用（由调用方降级）。"""
+    import subprocess
+    import tempfile
+    if not (os.path.isfile(_PS5_EXE) and os.path.isfile(_PS1_OCR)):
+        return {"lang": "", "lines": []}
+    tmpdir = tempfile.gettempdir()
+    img_path = os.path.join(tmpdir, "wb_ocr_in.png")
+    out_path = os.path.join(tmpdir, "wb_ocr_out.json")
+    pil.save(img_path, "PNG")
+    try:
+        subprocess.run(
+            [_PS5_EXE, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", _PS1_OCR,
+             "-ImgPath", img_path, "-OutPath", out_path],
+            timeout=120, creationflags=_CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with open(out_path, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+    except Exception:
+        return {"lang": "", "lines": []}
+
+
+def _winrt_hits(data, ox=0, oy=0):
+    """把 winrt JSON 转成 [(cx,cy,score,text)]。按相邻词间距合并词组：
+    「立/即/领/取」→ 一个命中（贴近 rapidocr 的文本框粒度，点击坐标更准）。"""
+    hits = []
+    for line in data.get("lines", []):
+        words = line.get("words") or []
+        if not words:
+            t = _norm_ocr_text(line.get("text", ""))
+            if t:
+                hits.append((int(line["x"] + line["w"] / 2) + ox,
+                             int(line["y"] + line["h"] / 2) + oy, 0.90, t))
+            continue
+        group, gx0, gy0, gx1, gy1 = [], None, None, None, None
+        for w in words:
+            wx0, wy0 = w["x"], w["y"]
+            wx1, wy1 = wx0 + w["w"], wy0 + w["h"]
+            if group and gx1 is not None:
+                gap = wx0 - gx1
+                if gap > max(24.0, 1.5 * (gy1 - gy0)):   # 大间隙 → 断组
+                    t = _norm_ocr_text("".join(group))
+                    if t:
+                        hits.append((int((gx0 + gx1) / 2) + ox, int((gy0 + gy1) / 2) + oy, 0.90, t))
+                    group, gx0, gy0, gx1, gy1 = [], None, None, None, None
+            group.append(w.get("text", ""))
+            gx0 = wx0 if gx0 is None else min(gx0, wx0)
+            gy0 = wy0 if gy0 is None else min(gy0, wy0)
+            gx1 = wx1 if gx1 is None else max(gx1, wx1)
+            gy1 = wy1 if gy1 is None else max(gy1, wy1)
+        if group and gx0 is not None:
+            t = _norm_ocr_text("".join(group))
+            if t:
+                hits.append((int((gx0 + gx1) / 2) + ox, int((gy0 + gy1) / 2) + oy, 0.90, t))
+    return hits
+
+
+def _ensure_backend():
+    """首次 OCR 调用时探测后端：优先 winrt（需识别出 zh 语言），否则 rapidocr。"""
+    global OCR_BACKEND, _RAPID_ENGINE
+    if OCR_BACKEND is not None:
+        return OCR_BACKEND
+    probe = Image.new("RGB", (8, 8), "white")
+    try:
+        data = _ocr_winrt_raw(probe)
+        if str(data.get("lang", "")).startswith("zh"):
+            OCR_BACKEND = "winrt"
+            log("[ocr] 后端 = Windows 系统 OCR（zh，零依赖）")
+            return OCR_BACKEND
+    except Exception:
+        pass
+    if RapidOCR is not None:
+        _RAPID_ENGINE = RapidOCR()
+        OCR_BACKEND = "rapidocr"
+        log("[ocr] 后端 = rapidocr（Windows 系统 OCR 不可用，已自动降级）")
+        return OCR_BACKEND
+    print("[FATAL] 无可用 OCR 后端：Windows 系统 OCR 不可用，且未安装 rapidocr。")
+    print("        方案一：系统设置→时间和语言→语言→添加中文(简体)语言包(含OCR)；")
+    print("        方案二：python -m pip install rapidocr-onnxruntime")
+    sys.exit(2)
 
 KEY_CLAIM = "立即领取"
 KEY_DONES = ("今日已领", "今日已领取", "今日已签到", "已签到", "已领取")
@@ -626,8 +876,47 @@ def virtual_screen():
             u.GetSystemMetrics(77) + u.GetSystemMetrics(79))
 
 
+def _grab_screen_gdi(l, t, r, b):
+    """纯 ctypes GDI 的屏幕区域抓取（PrintWindow 失败 + 无 mss 时的最终兜底）。"""
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    w, h = int(r - l), int(b - t)
+
+    hdc_screen = user32.GetDC(0)
+    hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+    hbmp = gdi32.CreateCompatibleBitmap(hdc_screen, w, h)
+    gdi32.SelectObject(hdc_mem, hbmp)
+    # SRCCOPY = 0x00CC0020；从屏幕 DC 拷到内存 DC
+    gdi32.BitBlt(hdc_mem, 0, 0, w, h, hdc_screen, int(l), int(t), 0x00CC0020)
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32),
+                    ("biHeight", ctypes.c_int32), ("biPlanes", ctypes.c_uint16),
+                    ("biBitCount", ctypes.c_uint16), ("biCompression", ctypes.c_uint32),
+                    ("biSizeImage", ctypes.c_uint32), ("biXPelsPerMeter", ctypes.c_int32),
+                    ("biYPelsPerMeter", ctypes.c_int32), ("biClrUsed", ctypes.c_uint32),
+                    ("biClrImportant", ctypes.c_uint32)]
+
+    bmi = BITMAPINFOHEADER()
+    bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+    bmi.biWidth = w
+    bmi.biHeight = -h          # 负值 = 自上而下，省一次翻转
+    bmi.biPlanes = 1
+    bmi.biBitCount = 32
+    bmi.biCompression = 0      # BI_RGB
+    buf = ctypes.create_string_buffer(w * h * 4)
+    gdi32.GetDIBits(hdc_mem, hbmp, 0, h, buf, ctypes.byref(bmi), 0)
+
+    gdi32.DeleteObject(hbmp)
+    gdi32.DeleteDC(hdc_mem)
+    user32.ReleaseDC(0, hdc_screen)
+
+    arr = np.frombuffer(buf.raw, dtype=np.uint8).reshape((h, w, 4))
+    return Image.fromarray(arr[:, :, [2, 1, 0]]), (int(l), int(t), int(r), int(b))
+
+
 def grab_screen_fallback(hwnd):
-    """PrintWindow 失败时的兜底（屏幕区域截图）。"""
+    """PrintWindow 失败时的兜底（屏幕区域截图）。mss 缺失时降级为 GDI BitBlt。"""
     l, t, r, b = win32gui.GetWindowRect(hwnd)
     try:
         mi = win32api.GetMonitorInfo(
@@ -642,6 +931,8 @@ def grab_screen_fallback(hwnd):
     r, b = min(r, vx1), min(b, vy1)
     if r <= l or b <= t:
         l, t, r, b = win32gui.GetWindowRect(hwnd)
+    if mss is None:
+        return _grab_screen_gdi(l, t, r, b)
     with mss.mss() as sct:
         img = sct.grab({"left": int(l), "top": int(t), "width": int(r - l), "height": int(b - t)})
         return Image.frombytes("RGB", img.size, img.rgb), (l, t, r, b)
@@ -658,20 +949,24 @@ def capture(hwnd):
 
 # ────────────────────────────── OCR ──────────────────────────────
 def ocr_pil(pil, ox=0, oy=0, min_score=0.0):
-    """OCR 一张图，返回 [(cx, cy, score, text)]（绝对坐标 = 内部坐标 + 偏移）。"""
-    img = np.array(pil.convert("RGB"))
-    res, _ = OCR_ENGINE(img)
-    out = []
-    for item in (res or []):
-        pts = np.array(item[0], dtype=np.float32)
-        try:
-            sc, txt = float(item[2]), str(item[1])
-        except Exception:
-            sc, txt = float(item[1]), str(item[2])
-        if sc < min_score:
-            continue
-        out.append((int(pts[:, 0].mean()) + ox, int(pts[:, 1].mean()) + oy, sc, txt))
-    return out
+    """OCR 一张图，返回 [(cx, cy, score, text)]（绝对坐标 = 内部坐标 + 偏移）。
+    v7.9：按后端分发 —— winrt（系统 OCR）或 rapidocr，接口不变。"""
+    backend = _ensure_backend()
+    if backend == "winrt":
+        data = _ocr_winrt_raw(pil)
+        out = _winrt_hits(data, ox, oy)
+    else:
+        img = np.array(pil.convert("RGB"))
+        res, _ = _RAPID_ENGINE(img)
+        out = []
+        for item in (res or []):
+            pts = np.array(item[0], dtype=np.float32)
+            try:
+                sc, txt = float(item[2]), str(item[1])
+            except Exception:
+                sc, txt = float(item[1]), str(item[2])
+            out.append((int(pts[:, 0].mean()) + ox, int(pts[:, 1].mean()) + oy, sc, txt))
+    return [h for h in out if h[2] >= min_score]
 
 
 def in_box(hit, box):
@@ -818,7 +1113,7 @@ def dump(hits, label):
 
 # ────────────────────────────── 动作 ──────────────────────────────
 def click(x, y, label=""):
-    pyautogui.click(int(x), int(y))
+    click_at(int(x), int(y))
     log(f"点击 ({int(x)}, {int(y)}) [{label}]")
 
 
@@ -1110,7 +1405,7 @@ def open_gas_panel(hwnd):
     acc = None
     if not menu_open:
         # 面板可能已开着 → 先 Esc 收起，回到主界面再走菜单
-        pyautogui.press("esc")
+        press_esc()
         time.sleep(1.0)
         hits, pil, rect, _ = read_sidebar(hwnd)
         acc = find_account_hit(hits, rect)
@@ -1153,7 +1448,7 @@ def open_gas_panel(hwnd):
 def close_gas_panel(hwnd):
     """Esc 收起积分面板，恢复主界面（幂等，供失败重试前复位用）。"""
     try:
-        pyautogui.press("esc")
+        press_esc()
         time.sleep(0.8)
     except Exception:
         pass
@@ -1276,9 +1571,9 @@ def fast_claim(hwnd, rect, cache):
     # 移开鼠标：避免悬停浮层遮挡/干扰。快路径前只做**一次轻量 Esc**（不做区域 OCR 的
     # 状态复位，也不做 wedged 探针）—— 因为快路径自带强校验，任何异常都会导致校验失败
     # 并回退完整流程（完整流程里才有这两步）。这是快路径提速的主要来源（省 ~11s）。
-    pyautogui.moveTo(l + int((r - l) * 0.55), t + int((b - t) * 0.5), duration=0.15)
+    move_to(l + int((r - l) * 0.55), t + int((b - t) * 0.5), duration=0.15)
     try:
-        pyautogui.press("esc")
+        press_esc()
     except Exception:
         pass
     time.sleep(0.8)
@@ -1318,9 +1613,9 @@ def scroll_sidebar(rect, clicks=18, direction=-1):
     """把侧栏滚到最底（用于兜底路径里寻找可能存在的卡片）。"""
     l, t, r, b = rect
     mx, my = int(l + 150), int(t + (b - t) * 0.55)
-    pyautogui.moveTo(mx, my)
+    move_to(mx, my)
     for _ in range(clicks):
-        pyautogui.scroll(int(15 * direction))
+        scroll(direction)
         time.sleep(0.08)
     time.sleep(0.8)
 
@@ -1428,7 +1723,7 @@ def reset_ui_state(hwnd, tries=2):
         l, t, r, b = _r
         safe_x = l + int((r - l) * 0.55)
         safe_y = t + int((b - t) * 0.5)
-        pyautogui.moveTo(safe_x, safe_y, duration=0.15)
+        move_to(safe_x, safe_y, duration=0.15)
         time.sleep(0.4)
     except Exception:
         pass
@@ -1445,10 +1740,10 @@ def reset_ui_state(hwnd, tries=2):
         log(f"[reset] 检测到残留浮层 → 移开鼠标 + Esc（第 {i+1}/{tries} 次）")
         if safe_x is not None:
             try:
-                pyautogui.moveTo(safe_x, safe_y, duration=0.15)
+                move_to(safe_x, safe_y, duration=0.15)
             except Exception:
                 pass
-        pyautogui.press("esc")
+        press_esc()
         time.sleep(1.2)
     log("[reset] 仍有浮层标记，继续（路径 1 会自行打开面板，无影响）")
     return False
@@ -1456,8 +1751,11 @@ def reset_ui_state(hwnd, tries=2):
 
 def main():
     log("=" * 60)
-    log("WorkBuddy 每日积分 - GUI 自动化 v7.7 (快路径缓存 + 区域OCR + 账户菜单主路径 + wedged 自愈)")
+    log("WorkBuddy 每日积分 - GUI 自动化 v7.9 (Windows系统OCR + 快路径缓存 + 区域OCR + 账户菜单主路径)")
     log(f"DPI 模式: {DPI_MODE}")
+    # v7.9：OCR 后端探测提前到启动时 —— 探测要起一次 PS 子进程（~3s），
+    # 若嵌在快路径的「点面板→等锚点」时序里会吃掉等待窗口、造成假性失效。
+    _ensure_backend()
 
     wins = find_window()
     if not wins:
@@ -1600,11 +1898,17 @@ def locate_claim_button(pil_img, rect):
     """模板匹配定位黑色「立即领取」按钮；返回屏幕绝对坐标。
 
     2026-10-13：模板文件可能不存在（分发时不带 PNG 资产）。
-    此时优雅返回 None —— 这只是**兜底路径 4**，主线靠文案锚点（路径 1/2/2.5/3），
+    此时优雅返回 None —— 这只是**兜底路径**，主线靠文案锚点（路径 1/2/2.5/3），
     缺模板不影响正常领取，故仅提示不报错。
+
+    2026-10-14：cv2 由必装改为可选。分发版不带模板 PNG ⇒ 本函数不会真正执行，
+    装 opencv-python 纯属浪费 ~60MB。缺 cv2 时同样优雅跳过。
     """
     if not os.path.exists(BLACK_BTN_TPL):
-        log("[路径4] 模板文件不存在（分发版可不带）→ 跳过模板兜底")
+        log("[模板兜底] 模板文件不存在（分发版可不带）→ 跳过")
+        return None
+    if cv2 is None:
+        log("[模板兜底] 未安装 opencv-python → 跳过（属于可选依赖，不影响领取）")
         return None
     try:
         tmpl = cv2.imread(BLACK_BTN_TPL, cv2.IMREAD_COLOR)
