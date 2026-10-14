@@ -558,8 +558,8 @@ def activate(hwnd):
                 break
         if win32gui.IsIconic(hwnd):
             # 最后一招：SetWindowPos + SWP_SHOWWINDOW，把窗口搬回可见区
-            u.SetWindowPos(hwnd, 0, 200, 100, 1400, 900,
-                           0x0040 | 0x0001 | 0x0002 | 0x0020)
+            win32gui.SetWindowPos(hwnd, 0, 200, 100, 1400, 900,
+                                 0x0040 | 0x0001 | 0x0002 | 0x0020)
             time.sleep(1.0)
     if not win32gui.IsWindowVisible(hwnd):
         try:
@@ -571,23 +571,23 @@ def activate(hwnd):
     _l, _t, _r, _b = win32gui.GetWindowRect(hwnd)
     if _l <= -32000 or _t <= -32000:
         log(f"[activate] 警告：还原后矩形仍为哨兵 {(_l,_t,_r,_b)}（窗口仍最小化/不可用）")
-    if not u.IsZoomed(hwnd):
+    if not (win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE) & win32con.WS_MAXIMIZE):
         try:
             win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
         except Exception:
             pass
         time.sleep(0.4)
     u.AllowSetForegroundWindow(-1)
-    u.keybd_event(0, 0, 0, 0)
+    win32api.keybd_event(0, 0, 0, 0)
     for _ in range(8):
         try:
             win32gui.SetForegroundWindow(hwnd)
         except Exception:
             pass
-        if u.GetForegroundWindow() == hwnd:
+        if win32gui.GetForegroundWindow() == hwnd:
             return True
         time.sleep(0.3)
-    return u.GetForegroundWindow() == hwnd
+    return win32gui.GetForegroundWindow() == hwnd
 
 
 # ═══════════════ v7.3（2026-10-06 实测定位并修复）渲染层 wedged 自愈 ═══════════════
@@ -650,7 +650,7 @@ def _ancestor_pids():
     while ok:
         parent[e.th32ProcessID] = e.th32ParentProcessID
         ok = k.Process32Next(snap, ctypes.byref(e))
-    chain, pid = set(), k.GetCurrentProcessId()
+    chain, pid = set(), win32api.GetCurrentProcessId()
     for _ in range(12):
         if not pid or pid in chain:
             break
@@ -803,10 +803,9 @@ def print_window(hwnd):
 
 
 def virtual_screen():
-    u = ctypes.windll.user32
-    return (u.GetSystemMetrics(76), u.GetSystemMetrics(77),
-            u.GetSystemMetrics(76) + u.GetSystemMetrics(78),
-            u.GetSystemMetrics(77) + u.GetSystemMetrics(79))
+    return (win32api.GetSystemMetrics(76), win32api.GetSystemMetrics(77),
+            win32api.GetSystemMetrics(76) + win32api.GetSystemMetrics(78),
+            win32api.GetSystemMetrics(77) + win32api.GetSystemMetrics(79))
 
 
 def _grab_screen_gdi(l, t, r, b):
