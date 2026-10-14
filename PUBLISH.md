@@ -52,39 +52,19 @@ workbuddy-daily-credits/          ← GitHub 仓库根 = skill 本体（= 本地
 > 官方技能包结构就是 `{skill-name}/SKILL.md`（见 <https://open.workbuddy.cn/docs/skill>），
 > 所以「仓库根 = skill 根」才是可被直接安装的形态。README 与 SKILL.md 同处根目录不冲突。
 
-### 3. 打 Release（**已做：v7.8.0**）
+### 3. 分发（**无需 GitHub Release**）
 
-**版本号约定**：`SKILL.md` frontmatter 里的 `version` 就是版本源头（当前 `7.8.0`）。
+**版本号约定**：`SKILL.md` frontmatter 里的 `version` 就是版本源头。
 改动判定逻辑 / 锚点常量 → 升 minor；只改文档 → 升 patch；目录结构破坏性变更 → 升 major。
 
-在**仓库根目录**执行，让 zip 内层带一层 `workbuddy-daily-credits/` 文件夹（符合官方技能包结构）：
+分发**只靠仓库本身**：用户 `git clone` 或下载仓库 ZIP（GitHub 仓库页 Code → Download ZIP）即可安装，README 安装块已写明，不需要打 Release、不需要附件 zip。推送到 `main` 即发布，之后用户 `git pull` 就能更新。
+
+> 若某环境只能走官方「上传技能」且要求 zip：可用下面命令在仓库根目录上一层产出一个内层带 `workbuddy-daily-credits/` 的包（符合官方技能包结构），但**不必上传到 Release**，直接交用户导入即可。
+> ⚠️ 不要用 GitHub 的「自动源码包」（`archive/refs/heads/main.zip`）——根目录名会带 `-main` 后缀，导入时技能名会变成 `workbuddy-daily-credits-main`。
 
 ```bash
 git archive --format=zip --prefix=workbuddy-daily-credits/ -o workbuddy-daily-credits.zip HEAD
 ```
-
-> ⚠️ 不要用 GitHub 的「自动源码包」（`archive/refs/heads/main.zip`）——它的根目录名会带 `-main` 后缀，
-> 导入时技能名会变成 `workbuddy-daily-credits-main`。
-
-**上传到 Release**（用 API 直接传附件，避免手工拖拽）：
-
-```bash
-# 1) 建 tag + release
-curl -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" \
-  https://api.github.com/repos/lxx19970628a/workbuddy-daily-credits/releases \
-  -d '{"tag_name":"v7.8.0","name":"v7.8.0","body":"<release notes>","draft":false,"prerelease":false}'
-
-# 2) 传附件（注意 Content-Type: application/zip）
-curl -X POST -H "Authorization: Bearer $GH_TOKEN" \
-  -H "Content-Type: application/zip" \
-  --data-binary @workbuddy-daily-credits.zip \
-  "https://api.github.com/repos/lxx19970628a/workbuddy-daily-credits/releases/<release_id>/assets?name=workbuddy-daily-credits.zip"
-```
-
-> ⚠️ curl 访问 GitHub 必须加 `--noproxy '*'`（本机 `~/.gitconfig` 里的 `127.0.0.1:7897` 代理已失效）。
-> 传完用 `releases/latest/download/workbuddy-daily-credits.zip` 这个**稳定链接**写进 README，不要写带 tag 的链接。
-
-这样用户既能 `git clone`，也能走官方「上传技能」通道导入。
 
 ## 二、让用户「一句话装好并自动跑起来」
 
@@ -228,8 +208,8 @@ README 已如实告知这些边界，避免过度承诺。
 - [x] **SKILL.md 位于仓库根目录**（否则 clone 到 `.workbuddy/skills/` 后 WorkBuddy 识别不出）
 - [x] **SKILL.md 第〇节写明「安装 = 安装 + 建每日任务」**，且禁止反问用户是否创建
 - [x] 第〇节的 `automation_update` 参数表可直接照抄（含 rrule / skills / cwds / 自包含 prompt 模板）
-- [x] Release 已发布并附 `workbuddy-daily-credits.zip`（内层含 `workbuddy-daily-credits/`，符合官方技能包结构）
-- [x] README 里用 `releases/latest/download/...` 稳定链接，不用带 tag 的链接
+- [x] 分发仅靠仓库（clone / 仓库 ZIP），不依赖 GitHub Release
+- [x] README 安装块用仓库地址，不写 Release 下载链接
 - [x] 脚本自包含，无路径硬编码，无外部资产依赖
 - [x] 在「无模板、无历史文件」的干净目录实测通过
 - [x] v7.6 面板区限定路径实测通过（`面板区域 (1909,927,2842,1321)` → `T2: 13天/1300分`）
@@ -247,7 +227,7 @@ README 已如实告知这些边界，避免过度承诺。
 
 ## 五、后续维护建议
 
-1. **客户端改版后第一时间更新锚点常量**，并在 Release Notes 里写清楚改了哪些字符串。
+1. **客户端改版后第一时间更新锚点常量**，并在 commit message（或 CHANGELOG）里写清楚改了哪些字符串。
 2. **把新的故障模式追加到 `references/troubleshooting.md`** —— 这份文档是项目最有价值的资产，它记录的是「真的踩过的坑」。
 3. **不要为了兼容而回退泛化改造**。例如不要为了让某台机器跑通而重新引入固定坐标或姓名格式假设。
 4. **做推断前先复位 UI 状态**。本项目历史上多次误诊都源于在脏帧上推断 —— 这是最高优先级的纪律。
